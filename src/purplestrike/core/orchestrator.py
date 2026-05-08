@@ -1,0 +1,435 @@
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from rich.console import Console
+from rich.table import Table
+
+from purplestrike.core.plan import AttackPlan, AttackPlanStep
+from purplestrike.models.config import PurpleStrikeConfig
+from purplestrike.models.remediation import RemediationEntry
+from purplestrike.models.report import SimulationReport, SimulationSummary
+from purplestrike.models.simulation import (
+    DetectionResult,
+    DetectionStatus,
+    ExecutionStatus,
+    RiskResult,
+    Simulation,
+    SimulationStatus,
+    SimulationStep,
+)
+from purplestrike.models.techniques import TechniqueResult
+from purplestrike.techniques.registry import technique_registry
+
+logger = logging.getLogger(__name__)
+console = Console()
+
+
+class Orchestrator:
+    """Top-level coordinator for PurpleStrike simulation runs."""
+
+    def __init__(self, config: PurpleStrikeConfig) -> None:
+        self.config = config
+        self._technique_registry = technique_registry
+        self._plan: AttackPlan | None = None
+        self._simulation: Simulation | None = None
+        self._stop_requested = False
+
+    async def generate_plan(
+        self,
+        mode: str = "agent",
+        target_group_name: str = "",
+        playbook_path: Path | None = None,
+        playbook_name: str | None = None,
+        tactics: list[str] | None = None,
+        technique_ids: list[str] | None = None,
+    ) -> AttackPlan | None:
+        if mode == "playbook":
+            return await self._generate_playbook_plan(playbook_path, playbook_name)
+        return await self._generate_agent_plan(target_group_name, tactics, technique_ids)
+
+    async def _generate_playbook_plan(
+        self,
+        playbook_path: Path | None = None,
+        playbook_name: str | None = None,
+    ) -> AttackPlan | None:
+        import yaml
+
+        path = playbook_path
+        if path is None and playbook_name:
+            for pb_dir in [
+                Path.home() / ".purplestrike" / "playbooks",
+                Path.cwd() / "playbooks",
+                Path(__file__).parent.parent.parent / "playbooks",
+            ]:
+                candidate = pb_dir / f"{playbook_name}.yaml"
+                if candidate.exists():
+                    path = candidate
+                    break
+
+        if path is None or not Path(path).exists():
+            logger.error("Playbook not found")
+            return None
+
+        with open(path) as f:
+            data = yaml.safe_load(f)
+
+        steps = []
+        for step_data in data.get("steps", []):
+            steps.append(AttackPlanStep(
+                order=step_data.get("order", len(steps) + 1),
+                technique_id=step_data.get("technique_id", ""),
+                technique_name=step_data.get("technique_name", ""),
+                target=step_data.get("target", ""),
+                parameters=step_data.get("parameters", {}),
+                expected_detection_rules=step_data.get("expected_detection_rules", []),
+                risk_level=step_data.get("risk_level", "medium"),
+            ))
+
+        return AttackPlan(
+            name=data.get("name", "Playbook"),
+            description=data.get("description", ""),
+            steps=steps,
+            target_group=data.get("target_group", ""),
+        )
+
+    async def _generate_agent_plan(
+        self,
+        target_group_name: str,
+        tactics: list[str] | None,
+        technique_ids: list[str] | None,
+    ) -> AttackPlan | None:
+        from purplestrike.plugins.loader import PluginLoader
+        from purplestrike.plugins.registry import plugin_registry
+
+        target_group = self.config.target_groups.get(target_group_name)
+        if target_group is None:
+            logger.error(f"Target group '{target_group_name}' not found")
+            return None
+
+        loader = PluginLoader(plugin_registry)
+        await loader.load_all()
+
+        llm_provider = plugin_registry.get_llm_provider(self.config.llm.provider.value)
+        if llm_provider is None:
+            logger.warning("No LLM provider available, falling back to technique selection")
+            return self._generate_default_plan(target_group_name, tactics, technique_ids)
+
+        from purplestrike.core.agent_loop import AgentLoop
+
+        agent = AgentLoop(
+            llm_provider=llm_provider,
+            technique_registry=self._technique_registry,
+            target_group=target_group,
+            config=self.config,
+        )
+
+        plan = await agent.generate_plan(tactics=tactics, technique_ids=technique_ids)
+        if plan is None:
+            logger.warning("Agent failed to generate plan, falling back to default selection")
+            return self._generate_default_plan(target_group_name, tactics, technique_ids)
+
+        return plan
+
+    def _generate_default_plan(
+        self,
+        target_group_name: str,
+        tactics: list[str] | None,
+        technique_ids: list[str] | None,
+    ) -> AttackPlan:
+        techniques = self._technique_registry.list_techniques()
+        if tactics:
+            techniques = [t for t in techniques if t.tactic in tactics]
+        if technique_ids:
+            techniques = [t for t in techniques if t.technique_id in technique_ids]
+
+        target_group = self.config.target_groups.get(target_group_name)
+        default_target = target_group.hosts[0].hostname if target_group and target_group.hosts else ""
+
+        steps = []
+        for i, t in enumerate(techniques[: self.config.max_steps], 1):
+            steps.append(AttackPlanStep(
+                order=i,
+                technique_id=t.technique_id,
+                technique_name=t.name,
+                target=default_target,
+                parameters={},
+                expected_detection_rules=[dm.rule_id for dm in t.detection_mappings],
+                risk_level=t.risk_level,
+            ))
+
+        return AttackPlan(
+            name="Default Technique Selection",
+            steps=steps,
+            target_group=target_group_name,
+        )
+
+    def display_plan(self, plan: AttackPlan) -> bool:
+        console.print(f"\n[bold]Plan: {plan.name}[/bold]")
+        console.print(f"Total steps: {len(plan.steps)}\n")
+
+        table = Table()
+        table.add_column("#", style="bold")
+        table.add_column("Technique ID")
+        table.add_column("Technique Name")
+        table.add_column("Target")
+        table.add_column("Risk")
+
+        for step in plan.steps:
+            risk_style = {"high": "red", "medium": "yellow", "low": "green"}.get(
+                step.risk_level, ""
+            )
+            table.add_row(
+                str(step.order),
+                step.technique_id,
+                step.technique_name,
+                step.target,
+                f"[{risk_style}]{step.risk_level}[/{risk_style}]" if risk_style else step.risk_level,
+            )
+
+        console.print(table)
+        console.print(f"\nEstimated time: ~{len(plan.steps) * 2} minutes\n")
+
+        response = input("Approve this plan? [y/n/e(edit)]: ").strip().lower()
+        return response == "y"
+
+    async def execute(
+        self,
+        mode: str = "agent",
+        target_group_name: str = "",
+        playbook_name: str | None = None,
+        tactics: list[str] | None = None,
+        technique_ids: list[str] | None = None,
+        skip_cleanup: bool = False,
+        dry_run: bool = False,
+    ) -> SimulationReport | None:
+        from purplestrike.techniques.registry import load_default_techniques
+        load_default_techniques()
+
+        plan = await self.generate_plan(
+            mode=mode,
+            target_group_name=target_group_name,
+            playbook_name=playbook_name,
+            tactics=tactics,
+            technique_ids=technique_ids,
+        )
+
+        if plan is None:
+            logger.error("Failed to generate plan")
+            return None
+
+        if not self.display_plan(plan):
+            console.print("[yellow]Plan rejected. Aborting.[/yellow]")
+            return None
+
+        if dry_run:
+            console.print("[yellow]Dry-run mode — plan generated but not executed.[/yellow]")
+            return None
+
+        from purplestrike.plugins.loader import PluginLoader
+        from purplestrike.plugins.registry import plugin_registry
+
+        loader = PluginLoader(plugin_registry)
+        await loader.load_all()
+
+        sim_id = f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        simulation = Simulation(
+            id=sim_id,
+            timestamp=datetime.now(UTC),
+            mode=mode,
+            target_group=target_group_name,
+            llm_provider=self.config.llm.provider.value,
+            siem_connector=self.config.siem.connector,
+            plan_name=plan.name,
+            status=SimulationStatus.COMPLETED,
+        )
+
+        siem_connector = plugin_registry.get_siem_connector(self.config.siem.connector)
+        if siem_connector:
+            try:
+                await siem_connector.setup(self.config.siem.model_dump())
+            except Exception as e:
+                logger.error(f"Failed to connect to SIEM: {e}")
+
+        sim_steps: list[SimulationStep] = []
+        for i, plan_step in enumerate(plan.steps, 1):
+            if self._stop_requested:
+                simulation.status = SimulationStatus.ABORTED
+                break
+
+            console.print(f"\n[*] Executing step {i}/{len(plan.steps)}: "
+                          f"{plan_step.technique_id} {plan_step.technique_name}...")
+
+            step_start = datetime.now(UTC)
+            technique_result = await self._execute_step(plan_step, plugin_registry)
+            step_end = datetime.now(UTC)
+
+            exec_status = ExecutionStatus.SUCCESS if technique_result.success else ExecutionStatus.FAILURE
+
+            detection_result = DetectionResult(status=DetectionStatus.UNKNOWN)
+            if siem_connector:
+                import asyncio
+                await asyncio.sleep(self.config.detection_check_delay)
+                detection_result = await self._validate_detection(
+                    siem_connector=siem_connector,
+                    plan_step=plan_step,
+                    start_time=step_start,
+                    end_time=step_end,
+                    plugin_registry=plugin_registry,
+                )
+
+            risk_result = self._calculate_risk(plan_step.technique_id, detection_result.status)
+
+            det_status = detection_result.status
+            det_icon = {"detected": "[green]DETECTED[/green]", "partially_detected": "[yellow]PARTIALLY DETECTED[/yellow]", "not_detected": "[red]NOT DETECTED[/red]", "unknown": "[dim]UNKNOWN[/dim]"}
+            console.print(f"    [{'✓' if technique_result.success else '✗'}] Executed {'successfully' if technique_result.success else 'failed'} ({technique_result.execution_time_seconds:.1f}s)")
+            console.print(f"    {det_icon.get(det_status, det_status)}")
+
+            sim_step = SimulationStep(
+                step=i,
+                technique_id=plan_step.technique_id,
+                technique_name=plan_step.technique_name,
+                tactic=self._get_tactic_for_technique(plan_step.technique_id),
+                target=plan_step.target,
+                execution_status=exec_status,
+                execution_time_seconds=technique_result.execution_time_seconds,
+                detection_result=detection_result,
+            )
+            sim_steps.append(sim_step)
+
+        if siem_connector:
+            try:
+                await siem_connector.teardown()
+            except Exception:
+                pass
+
+        if not skip_cleanup:
+            await self._cleanup_all(plan, plugin_registry)
+
+        simulation.steps = sim_steps
+        summary = SimulationSummary.from_steps(sim_steps)
+
+        remediation_entries = self._generate_remediation(sim_steps)
+
+        report = SimulationReport(
+            simulation_id=sim_id,
+            timestamp=simulation.timestamp,
+            mode=mode,
+            target_group=target_group_name,
+            llm_provider=self.config.llm.provider.value,
+            siem_connector=self.config.siem.connector,
+            status=simulation.status,
+            plan_name=plan.name,
+            results=sim_steps,
+            summary=summary,
+            remediation=remediation_entries,
+        )
+
+        output_dir = Path(self.config.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        for fmt_name in (["json", "csv"] if self.config.output_dir else []):
+            formatter = plugin_registry.get_report_formatter(fmt_name)
+            if formatter:
+                try:
+                    await formatter.format(report, output_dir)
+                except Exception as e:
+                    logger.error(f"Failed to generate {fmt_name} report: {e}")
+
+        return report
+
+    async def _execute_step(
+        self,
+        plan_step: AttackPlanStep,
+        plugin_registry: Any,
+    ) -> TechniqueResult:
+        import time
+
+        executor = plugin_registry.find_executor_for_technique(plan_step.technique_id)
+
+        if executor is None:
+            executor = plugin_registry.get_attack_executor("custom_python")
+
+        if executor is None:
+            return TechniqueResult(
+                technique_id=plan_step.technique_id,
+                success=False,
+                error="No executor available",
+                execution_status=ExecutionStatus.FAILURE,
+            )
+
+        start = time.monotonic()
+        try:
+            result = await executor.execute(
+                technique_id=plan_step.technique_id,
+                target=plan_step.target,
+                parameters=plan_step.parameters,
+            )
+        except Exception as e:
+            result = TechniqueResult(
+                technique_id=plan_step.technique_id,
+                success=False,
+                error=str(e),
+                execution_status=ExecutionStatus.FAILURE,
+            )
+        result.execution_time_seconds = time.monotonic() - start
+        return result
+
+    async def _validate_detection(
+        self,
+        siem_connector: Any,
+        plan_step: AttackPlanStep,
+        start_time: datetime,
+        end_time: datetime,
+        plugin_registry: Any,
+    ) -> DetectionResult:
+        from purplestrike.validation.engine import DetectionValidationEngine
+
+        engine = DetectionValidationEngine(
+            siem_connector=siem_connector,
+            plugin_registry=plugin_registry,
+            config=self.config,
+        )
+
+        return await engine.validate_step(
+            technique_id=plan_step.technique_id,
+            expected_rules=plan_step.expected_detection_rules,
+            target=plan_step.target,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    def _calculate_risk(self, technique_id: str, detection_status: DetectionStatus) -> RiskResult:
+        from purplestrike.risk.quantifier import RiskQuantifier
+
+        quantifier = RiskQuantifier(self.config.risk)
+        return quantifier.calculate(technique_id, detection_status)
+
+    def _get_tactic_for_technique(self, technique_id: str) -> Any:
+        technique = self._technique_registry.get_technique(technique_id)
+        if technique:
+            return technique.tactic
+        from purplestrike.models.techniques import TacticID
+        return TacticID.INITIAL_ACCESS
+
+    async def _cleanup_all(self, plan: AttackPlan, plugin_registry: Any) -> None:
+        for step in plan.steps:
+            for executor_name in plugin_registry.list_attack_executors():
+                executor = plugin_registry.get_attack_executor(executor_name)
+                if executor and step.technique_id in executor.supported_techniques:
+                    try:
+                        await executor.cleanup(step.technique_id, step.target)
+                    except Exception as e:
+                        logger.warning(f"Cleanup failed for {step.technique_id} on {step.target}: {e}")
+
+    def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
+        from purplestrike.remediation.engine import RemediationEngine
+
+        engine = RemediationEngine()
+        return engine.generate_remediation(steps)
+
+    def request_stop(self) -> None:
+        self._stop_requested = True

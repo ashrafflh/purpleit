@@ -1,0 +1,162 @@
+from purplestrike.models.techniques import (
+    DetectionMapping,
+    TacticID,
+    Technique,
+    TechniqueParameter,
+)
+
+EXECUTION_TECHNIQUES = [
+    Technique(
+        technique_id="T1059.001",
+        name="Command and Scripting Interpreter: PowerShell",
+        tactic=TacticID.EXECUTION,
+        description="Executes commands via PowerShell",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.powershell",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100100", confidence="high", description="Detects suspicious PowerShell execution"),
+        ],
+        parameters=[
+            TechniqueParameter(name="command", description="PowerShell command to execute", type="string", required=True),
+            TechniqueParameter(name="encoded", description="Use encoded command", type="boolean", default=False),
+        ],
+    ),
+    Technique(
+        technique_id="T1059.003",
+        name="Command and Scripting Interpreter: Windows Command Shell",
+        tactic=TacticID.EXECUTION,
+        description="Executes commands via cmd.exe",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.cmd_shell",
+        risk_level="low",
+        detection_mappings=[
+            DetectionMapping(rule_id="100101", confidence="high", description="Detects suspicious cmd.exe execution"),
+        ],
+        parameters=[
+            TechniqueParameter(name="command", description="Command to execute", type="string", required=True),
+        ],
+    ),
+    Technique(
+        technique_id="T1059.004",
+        name="Command and Scripting Interpreter: Bash",
+        tactic=TacticID.EXECUTION,
+        description="Executes commands via Bash",
+        target_os=["linux"],
+        executor="custom_python",
+        module="execution.bash",
+        risk_level="low",
+        detection_mappings=[
+            DetectionMapping(rule_id="100102", confidence="high", description="Detects suspicious bash execution"),
+        ],
+        parameters=[
+            TechniqueParameter(name="command", description="Bash command to execute", type="string", required=True),
+        ],
+    ),
+    Technique(
+        technique_id="T1059.005",
+        name="Command and Scripting Interpreter: Visual Basic",
+        tactic=TacticID.EXECUTION,
+        description="Executes commands via Visual Basic",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.visual_basic",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100103", confidence="medium", description="Detects VBA macro execution"),
+        ],
+    ),
+    Technique(
+        technique_id="T1047",
+        name="Windows Management Instrumentation",
+        tactic=TacticID.EXECUTION,
+        description="Uses WMI for remote command execution",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.wmi",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100104", confidence="high", description="Detects WMI remote execution"),
+        ],
+        parameters=[
+            TechniqueParameter(name="command", description="WMI command to execute", type="string", required=True),
+        ],
+    ),
+    Technique(
+        technique_id="T1569.001",
+        name="System Services: Launch Agent",
+        tactic=TacticID.EXECUTION,
+        description="Uses launch agents for execution on macOS (simulated on Linux via systemd)",
+        target_os=["linux"],
+        executor="custom_python",
+        module="execution.launch_agent",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100105", confidence="medium", description="Detects suspicious launch agent creation"),
+        ],
+    ),
+    Technique(
+        technique_id="T1569.002",
+        name="System Services: Service Execution",
+        tactic=TacticID.EXECUTION,
+        description="Executes commands via Windows services",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.service_execution",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100106", confidence="high", description="Detects suspicious service creation or modification"),
+        ],
+        parameters=[
+            TechniqueParameter(name="service_name", description="Service name to create/modify", type="string", required=True),
+            TechniqueParameter(name="command", description="Command the service will execute", type="string", required=True),
+        ],
+    ),
+    Technique(
+        technique_id="T1204.001",
+        name="User Execution: Malicious Link",
+        tactic=TacticID.EXECUTION,
+        description="Simulates user clicking a malicious link (no real network traffic)",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.malicious_link",
+        risk_level="low",
+        safe_to_execute=True,
+        detection_mappings=[
+            DetectionMapping(rule_id="100107", confidence="low", description="Detects suspicious browser or URL activity"),
+        ],
+    ),
+    Technique(
+        technique_id="T1204.002",
+        name="User Execution: Malicious File",
+        tactic=TacticID.EXECUTION,
+        description="Simulates user opening a malicious file",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.malicious_file",
+        risk_level="low",
+        safe_to_execute=True,
+        detection_mappings=[
+            DetectionMapping(rule_id="100108", confidence="medium", description="Detects suspicious file execution"),
+        ],
+    ),
+    Technique(
+        technique_id="T1053.005",
+        name="Scheduled Task/Job: Scheduled Task",
+        tactic=TacticID.EXECUTION,
+        description="Creates a scheduled task for execution",
+        target_os=["windows"],
+        executor="custom_python",
+        module="execution.scheduled_task",
+        risk_level="medium",
+        detection_mappings=[
+            DetectionMapping(rule_id="100109", confidence="high", description="Detects scheduled task creation"),
+        ],
+        parameters=[
+            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True),
+            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True),
+        ],
+    ),
+]
