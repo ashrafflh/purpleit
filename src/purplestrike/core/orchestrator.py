@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -111,7 +112,7 @@ class Orchestrator:
             return None
 
         loader = PluginLoader(plugin_registry)
-        await loader.load_all()
+        await loader.load_all(self._plugin_config())
 
         llm_provider = plugin_registry.get_llm_provider(self.config.llm.provider.value)
         if llm_provider is None:
@@ -147,7 +148,9 @@ class Orchestrator:
             techniques = [t for t in techniques if t.technique_id in technique_ids]
 
         target_group = self.config.target_groups.get(target_group_name)
-        default_target = target_group.hosts[0].hostname if target_group and target_group.hosts else ""
+        default_target = (
+            target_group.hosts[0].hostname if target_group and target_group.hosts else ""
+        )
 
         steps = []
         for i, t in enumerate(techniques[: self.config.max_steps], 1):
@@ -187,7 +190,11 @@ class Orchestrator:
                 step.technique_id,
                 step.technique_name,
                 step.target,
-                f"[{risk_style}]{step.risk_level}[/{risk_style}]" if risk_style else step.risk_level,
+                (
+                    f"[{risk_style}]{step.risk_level}[/{risk_style}]"
+                    if risk_style
+                    else step.risk_level
+                ),
             )
 
         console.print(table)
@@ -233,7 +240,7 @@ class Orchestrator:
         from purplestrike.plugins.registry import plugin_registry
 
         loader = PluginLoader(plugin_registry)
-        await loader.load_all()
+        await loader.load_all(self._plugin_config())
 
         sim_id = f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         simulation = Simulation(
@@ -267,7 +274,11 @@ class Orchestrator:
             technique_result = await self._execute_step(plan_step, plugin_registry)
             step_end = datetime.now(UTC)
 
-            exec_status = ExecutionStatus.SUCCESS if technique_result.success else ExecutionStatus.FAILURE
+            exec_status = (
+                ExecutionStatus.SUCCESS
+                if technique_result.success
+                else ExecutionStatus.FAILURE
+            )
 
             detection_result = DetectionResult(status=DetectionStatus.UNKNOWN)
             if siem_connector:
@@ -281,11 +292,19 @@ class Orchestrator:
                     plugin_registry=plugin_registry,
                 )
 
-            risk_result = self._calculate_risk(plan_step.technique_id, detection_result.status)
-
             det_status = detection_result.status
-            det_icon = {"detected": "[green]DETECTED[/green]", "partially_detected": "[yellow]PARTIALLY DETECTED[/yellow]", "not_detected": "[red]NOT DETECTED[/red]", "unknown": "[dim]UNKNOWN[/dim]"}
-            console.print(f"    [{'✓' if technique_result.success else '✗'}] Executed {'successfully' if technique_result.success else 'failed'} ({technique_result.execution_time_seconds:.1f}s)")
+            det_icon = {
+                "detected": "[green]DETECTED[/green]",
+                "partially_detected": "[yellow]PARTIALLY DETECTED[/yellow]",
+                "not_detected": "[red]NOT DETECTED[/red]",
+                "unknown": "[dim]UNKNOWN[/dim]",
+            }
+            status_icon = "✓" if technique_result.success else "✗"
+            status_text = "successfully" if technique_result.success else "failed"
+            console.print(
+                f"    [{status_icon}] Executed {status_text} "
+                f"({technique_result.execution_time_seconds:.1f}s)"
+            )
             console.print(f"    {det_icon.get(det_status, det_status)}")
 
             sim_step = SimulationStep(
@@ -301,10 +320,8 @@ class Orchestrator:
             sim_steps.append(sim_step)
 
         if siem_connector:
-            try:
+            with suppress(Exception):
                 await siem_connector.teardown()
-            except Exception:
-                pass
 
         if not skip_cleanup:
             await self._cleanup_all(plan, plugin_registry)
@@ -423,7 +440,9 @@ class Orchestrator:
                     try:
                         await executor.cleanup(step.technique_id, step.target)
                     except Exception as e:
-                        logger.warning(f"Cleanup failed for {step.technique_id} on {step.target}: {e}")
+                        logger.warning(
+                            f"Cleanup failed for {step.technique_id} on {step.target}: {e}"
+                        )
 
     def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
         from purplestrike.remediation.engine import RemediationEngine
@@ -433,3 +452,13 @@ class Orchestrator:
 
     def request_stop(self) -> None:
         self._stop_requested = True
+
+    def _plugin_config(self) -> dict[str, Any]:
+        return {
+            "siem_connectors": {
+                self.config.siem.connector: self.config.siem.model_dump(mode="json"),
+            },
+            "llm_providers": {
+                self.config.llm.provider.value: self.config.llm.model_dump(mode="json"),
+            },
+        }

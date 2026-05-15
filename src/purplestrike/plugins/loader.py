@@ -33,10 +33,14 @@ class PluginLoader:
     async def load_all(self, config: dict[str, Any] | None = None) -> None:
         config = config or {}
         await self._load_builtin_executors(config.get("attack_executors", {}))
-        await self._load_builtin_siem_connectors(config.get("siem_connectors", {}))
+        await self.load_siem_connectors(config)
         await self._load_builtin_llm_providers(config.get("llm_providers", {}))
         await self._load_builtin_report_formatters(config.get("report_formatters", {}))
         await self._load_user_plugins(config)
+
+    async def load_siem_connectors(self, config: dict[str, Any] | None = None) -> None:
+        config = config or {}
+        await self._load_builtin_siem_connectors(config.get("siem_connectors", {}))
 
     async def _load_builtin_executors(self, config: dict[str, Any]) -> None:
         for name in BUILTIN_EXECUTORS:
@@ -66,7 +70,6 @@ class PluginLoader:
                     logger.warning(f"No connector class found in {name}")
                     continue
                 connector = cls()
-                await connector.setup(config.get(name, {}))
                 self.registry.register_siem_connector(connector)
                 logger.info(f"Loaded SIEM connector: {name}")
             except Exception as e:

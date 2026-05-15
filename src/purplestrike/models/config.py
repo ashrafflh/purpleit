@@ -76,6 +76,8 @@ class SIEMConfig(BaseModel):
     api_user: str = ""
     api_password: str = ""
     api_timeout: int = 30
+    dashboard_url: str = ""
+    dashboard_api_id: str = "default"
     extra: dict[str, Any] = Field(default_factory=dict)
 
 

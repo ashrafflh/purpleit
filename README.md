@@ -94,9 +94,12 @@ PURPLESTRIKE_TARGET_PASSWORD=<password>
 
 # Wazuh SIEM
 PURPLESTRIKE_WAZUH_API_URL=https://wazuh-manager:55000
-PURPLESTRIKE_WAZUH_API_USER=purplestrike
+PURPLESTRIKE_WAZUH_API_USER=admin
 PURPLESTRIKE_WAZUH_API_PASSWORD=<password>
 PURPLESTRIKE_WAZUH_API_TIMEOUT=30
+# PurpleStrike logs into the Wazuh Dashboard and obtains a Wazuh API JWT from it
+PURPLESTRIKE_WAZUH_DASHBOARD_URL=https://wazuh-dashboard
+PURPLESTRIKE_WAZUH_DASHBOARD_API_ID=default
 
 # LLM Provider (openai | anthropic | ollama | vllm)
 PURPLESTRIKE_LLM_PROVIDER=openai
@@ -206,7 +209,7 @@ purplestrike siem test
 purplestrike siem rules
 
 # List rules for a specific technique
-purplestrike siem rules --technique T1558.001
+purplestrike siem rules --technique T1543.003
 ```
 
 ### `purplestrike config`
@@ -222,6 +225,9 @@ purplestrike config show
 
 # Set a configuration value (dot-notation)
 purplestrike config set-value siem.api_url https://wazuh:55000
+purplestrike config set-value siem.api_user admin
+purplestrike config set-value siem.api_password
+purplestrike config set-value siem.dashboard_url https://wazuh-dashboard
 
 # Validate configuration
 purplestrike config validate

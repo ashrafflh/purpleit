@@ -12,6 +12,7 @@ app = typer.Typer(no_args_is_help=True)
 console = Console()
 
 DEFAULT_CONFIG_PATH = Path.home() / ".purplestrike" / "config.yaml"
+DEFAULT_WAZUH_DASHBOARD_USER = "admin"
 
 
 @app.command()
@@ -22,11 +23,24 @@ def init() -> None:
     config = PurpleStrikeConfig()
 
     siem_url = typer.prompt("Wazuh API URL", default="https://wazuh-manager:55000")
-    siem_user = typer.prompt("Wazuh API username", default="purplestrike")
+    siem_user = typer.prompt("Wazuh Dashboard username", default=DEFAULT_WAZUH_DASHBOARD_USER)
+    siem_password = typer.prompt(
+        "Wazuh Dashboard password (blank to use PURPLESTRIKE_WAZUH_API_PASSWORD)",
+        default="",
+        hide_input=True,
+        show_default=False,
+    )
+    dashboard_url = typer.prompt(
+        "Wazuh Dashboard URL (blank to derive from Wazuh API URL)",
+        default="",
+        show_default=False,
+    )
     siem_timeout = typer.prompt("Wazuh API timeout (seconds)", default=30, type=int)
 
     config.siem.api_url = siem_url
     config.siem.api_user = siem_user
+    config.siem.api_password = siem_password
+    config.siem.dashboard_url = dashboard_url
     config.siem.api_timeout = siem_timeout
 
     config.detection_check_delay = typer.prompt(
@@ -40,7 +54,11 @@ def init() -> None:
     PurpleStrikeConfig.to_yaml(config, config_path)
 
     console.print(f"\n[green]Configuration saved to {config_path}[/green]")
-    console.print("[yellow]Remember to set environment variables for credentials (see .env.example)[/yellow]")
+    if not config.siem.api_password:
+        console.print(
+            "[yellow]Set PURPLESTRIKE_WAZUH_API_PASSWORD or run "
+            "'purplestrike config set-value siem.api_password'.[/yellow]"
+        )
 
 
 @app.command()
@@ -56,8 +74,10 @@ def show() -> None:
 
     table.add_row("SIEM Connector", config.siem.connector)
     table.add_row("SIEM API URL", config.siem.api_url or "(from env)")
-    table.add_row("SIEM API User", config.siem.api_user or "(from env)")
+    table.add_row("Wazuh Dashboard User", config.siem.api_user or "(from env)")
     table.add_row("SIEM Timeout", str(config.siem.api_timeout))
+    table.add_row("Wazuh Dashboard URL", config.siem.dashboard_url or "(derived)")
+    table.add_row("Wazuh Dashboard API ID", config.siem.dashboard_api_id)
     table.add_row("LLM Provider", config.llm.provider)
     table.add_row("Detection Check Delay", str(config.detection_check_delay))
     table.add_row("Max Steps", str(config.max_steps))
@@ -71,18 +91,26 @@ def show() -> None:
 
 
 @app.command()
-def set_value(key: str, value: str) -> None:
+def set_value(key: str, value: str | None = typer.Argument(None)) -> None:
     """Set a configuration value."""
     config = _load_config()
     if config is None:
         config = PurpleStrikeConfig()
+
+    if value is None:
+        value = typer.prompt(
+            key,
+            hide_input=_is_secret_key(key),
+            confirmation_prompt=_is_secret_key(key),
+        )
 
     parts = key.split(".")
     _set_nested(config, parts, value)
 
     config_path = DEFAULT_CONFIG_PATH
     PurpleStrikeConfig.to_yaml(config, config_path)
-    console.print(f"[green]Set {key} = {value}[/green]")
+    display_value = "***" if _is_secret_key(key) else value
+    console.print(f"[green]Set {key} = {display_value}[/green]")
 
 
 @app.command(name="validate")
@@ -97,7 +125,7 @@ def validate_config() -> None:
     if not config.siem.api_url:
         issues.append("SIEM API URL not configured (set PURPLESTRIKE_WAZUH_API_URL)")
     if not config.siem.api_user:
-        issues.append("SIEM API user not configured (set PURPLESTRIKE_WAZUH_API_USER)")
+        issues.append("Wazuh Dashboard user not configured (set PURPLESTRIKE_WAZUH_API_USER)")
 
     if issues:
         console.print("[red]Configuration issues:[/red]")
@@ -111,7 +139,9 @@ def validate_config() -> None:
 def _load_config() -> PurpleStrikeConfig | None:
     if DEFAULT_CONFIG_PATH.exists():
         return PurpleStrikeConfig.from_yaml(DEFAULT_CONFIG_PATH)
-    console.print("[yellow]No configuration file found. Run 'purplestrike config init' first.[/yellow]")
+    console.print(
+        "[yellow]No configuration file found. Run 'purplestrike config init' first.[/yellow]"
+    )
     return None
 
 
@@ -126,3 +156,8 @@ def _set_nested(obj: object, parts: list[str], value: str) -> None:
         setattr(obj, field_name, float(value))
     else:
         setattr(obj, field_name, value)
+
+
+def _is_secret_key(key: str) -> bool:
+    lowered = key.lower()
+    return "password" in lowered or "api_key" in lowered or "secret" in lowered
