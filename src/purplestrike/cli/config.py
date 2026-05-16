@@ -138,7 +138,10 @@ def validate_config() -> None:
 
 def _load_config() -> PurpleStrikeConfig | None:
     if DEFAULT_CONFIG_PATH.exists():
-        return PurpleStrikeConfig.from_yaml(DEFAULT_CONFIG_PATH)
+        return PurpleStrikeConfig.from_yaml_or_env(DEFAULT_CONFIG_PATH)
+    env_config = PurpleStrikeConfig.from_env()
+    if env_config.siem.api_url or env_config.siem.api_user or env_config.siem.api_password:
+        return env_config
     console.print(
         "[yellow]No configuration file found. Run 'purplestrike config init' first.[/yellow]"
     )

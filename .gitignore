@@ -38,3 +38,6 @@ Thumbs.db
 htmlcov/
 .coverage
 coverage.xml
+
+# uv
+uv.lock

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dotenv import load_dotenv
 import typer
 from rich.console import Console
 
 import purplestrike
+
+load_dotenv()
 
 app = typer.Typer(
     name="purplestrike",

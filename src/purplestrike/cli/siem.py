@@ -101,8 +101,8 @@ async def _list_rules(technique: str | None) -> None:
 
 def _load_config() -> PurpleStrikeConfig:
     if DEFAULT_CONFIG_PATH.exists():
-        return PurpleStrikeConfig.from_yaml(DEFAULT_CONFIG_PATH)
-    return PurpleStrikeConfig()
+        return PurpleStrikeConfig.from_yaml_or_env(DEFAULT_CONFIG_PATH)
+    return PurpleStrikeConfig.from_env()
 
 
 def _plugin_config(config: PurpleStrikeConfig) -> dict[str, object]:

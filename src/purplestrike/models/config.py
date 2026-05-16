@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import os
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -123,7 +124,73 @@ class PurpleStrikeConfig(BaseModel):
 
         with open(path) as f:
             data = yaml.safe_load(f) or {}
+        data = cls._apply_env_overrides(data)
         return cls.model_validate(data)
+
+    @classmethod
+    def from_env(cls) -> PurpleStrikeConfig:
+        return cls.model_validate(cls._apply_env_overrides({}))
+
+    @classmethod
+    def from_yaml_or_env(cls, path: Path) -> PurpleStrikeConfig:
+        if path.exists():
+            return cls.from_yaml(path)
+        return cls.from_env()
+
+    @classmethod
+    def _apply_env_overrides(cls, data: dict[str, Any]) -> dict[str, Any]:
+        def _get_nested(node: dict[str, Any], keys: list[str]) -> Any:
+            for key in keys:
+                if not isinstance(node, dict) or key not in node:
+                    return None
+                node = node[key]
+            return node
+
+        def _set_nested(node: dict[str, Any], keys: list[str], value: Any) -> None:
+            for key in keys[:-1]:
+                if key not in node or not isinstance(node[key], dict):
+                    node[key] = {}
+                node = node[key]
+            node[keys[-1]] = value
+
+        env_overrides: dict[str, tuple[list[str], Callable[[str], Any]]] = {
+            "PURPLESTRIKE_SIEM_CONNECTOR": (["siem", "connector"], str),
+            "PURPLESTRIKE_SIEM_API_URL": (["siem", "api_url"], str),
+            "PURPLESTRIKE_WAZUH_API_URL": (["siem", "api_url"], str),
+            "PURPLESTRIKE_SIEM_API_USER": (["siem", "api_user"], str),
+            "PURPLESTRIKE_WAZUH_API_USER": (["siem", "api_user"], str),
+            "PURPLESTRIKE_SIEM_API_PASSWORD": (["siem", "api_password"], str),
+            "PURPLESTRIKE_WAZUH_API_PASSWORD": (["siem", "api_password"], str),
+            "PURPLESTRIKE_SIEM_API_TIMEOUT": (["siem", "api_timeout"], int),
+            "PURPLESTRIKE_WAZUH_API_TIMEOUT": (["siem", "api_timeout"], int),
+            "PURPLESTRIKE_SIEM_DASHBOARD_URL": (["siem", "dashboard_url"], str),
+            "PURPLESTRIKE_WAZUH_DASHBOARD_URL": (["siem", "dashboard_url"], str),
+            "PURPLESTRIKE_SIEM_DASHBOARD_API_ID": (["siem", "dashboard_api_id"], str),
+            "PURPLESTRIKE_WAZUH_DASHBOARD_API_ID": (["siem", "dashboard_api_id"], str),
+            "PURPLESTRIKE_LLM_PROVIDER": (["llm", "provider"], str),
+            "PURPLESTRIKE_LLM_MODEL": (["llm", "model"], str),
+            "PURPLESTRIKE_LLM_API_KEY": (["llm", "api_key"], str),
+            "PURPLESTRIKE_OPENAI_API_KEY": (["llm", "api_key"], str),
+            "PURPLESTRIKE_ANTHROPIC_API_KEY": (["llm", "api_key"], str),
+            "PURPLESTRIKE_LLM_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_OLLAMA_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_VLLM_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_LLM_TEMPERATURE": (["llm", "temperature"], float),
+            "PURPLESTRIKE_LLM_MAX_TOKENS": (["llm", "max_tokens"], int),
+            "PURPLESTRIKE_DB_PATH": (["db_path"], str),
+            "PURPLESTRIKE_DETECTION_CHECK_DELAY": (["detection_check_delay"], int),
+            "PURPLESTRIKE_MAX_STEPS": (["max_steps"], int),
+            "PURPLESTRIKE_OUTPUT_DIR": (["output_dir"], str),
+        }
+
+        for env_name, (keys, cast) in env_overrides.items():
+            value = os.getenv(env_name)
+            if value is None or value == "":
+                continue
+            # Always override with env vars when present.
+            _set_nested(data, keys, cast(value))
+
+        return data
 
     @classmethod
     def to_yaml(cls, config: PurpleStrikeConfig, path: Path) -> None:

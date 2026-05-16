@@ -62,9 +62,9 @@ async def _run(
 
     config_path = Path.home() / ".purplestrike" / "config.yaml"
     if config_path.exists():
-        config = PurpleStrikeConfig.from_yaml(config_path)
+        config = PurpleStrikeConfig.from_yaml_or_env(config_path)
     else:
-        config = PurpleStrikeConfig()
+        config = PurpleStrikeConfig.from_env()
 
     if llm_provider:
         from purplestrike.models.config import LLMProviderType
