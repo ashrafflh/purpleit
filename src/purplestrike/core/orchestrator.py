@@ -38,6 +38,15 @@ class Orchestrator:
         self._plan: AttackPlan | None = None
         self._simulation: Simulation | None = None
         self._stop_requested = False
+        self._set_target_credentials()
+
+    def _set_target_credentials(self) -> None:
+        from purplestrike.techniques.connection import set_target_credentials
+        set_target_credentials(
+            domain=self.config.target_ad_domain,
+            username=self.config.target_username,
+            password=self.config.target_password,
+        )
 
     async def generate_plan(
         self,

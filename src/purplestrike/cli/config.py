@@ -43,6 +43,15 @@ def init() -> None:
     config.siem.dashboard_url = dashboard_url
     config.siem.api_timeout = siem_timeout
 
+    config.target_ad_domain = typer.prompt("Target AD domain", default="corp.local")
+    config.target_username = typer.prompt("Target username", default="attack_user")
+    config.target_password = typer.prompt(
+        "Target password (blank to use PURPLESTRIKE_TARGET_PASSWORD)",
+        default="",
+        hide_input=True,
+        show_default=False,
+    )
+
     config.detection_check_delay = typer.prompt(
         "Detection check delay (seconds)", default=30, type=int
     )
@@ -83,6 +92,10 @@ def show() -> None:
     table.add_row("Max Steps", str(config.max_steps))
     table.add_row("Output Dir", config.output_dir)
     table.add_row("DB Path", config.db_path or "(default)")
+
+    table.add_row("Target AD Domain", config.target_ad_domain or "(not set)")
+    table.add_row("Target Username", config.target_username or "(not set)")
+    table.add_row("Target Password", "***" if config.target_password else "(not set)")
 
     if config.target_groups:
         table.add_row("Target Groups", ", ".join(config.target_groups.keys()))
@@ -126,6 +139,8 @@ def validate_config() -> None:
         issues.append("SIEM API URL not configured (set PURPLESTRIKE_WAZUH_API_URL)")
     if not config.siem.api_user:
         issues.append("Wazuh Dashboard user not configured (set PURPLESTRIKE_WAZUH_API_USER)")
+    if not config.target_password:
+        issues.append("Target password not configured (set PURPLESTRIKE_TARGET_PASSWORD)")
 
     if issues:
         console.print("[red]Configuration issues:[/red]")

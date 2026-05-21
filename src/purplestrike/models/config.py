@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from enum import StrEnum
 from pathlib import Path
@@ -87,6 +88,7 @@ class LLMProviderType(StrEnum):
     ANTHROPIC = "anthropic"
     OLLAMA = "ollama"
     VLLM = "vllm"
+    NVIDIA = "nvidia"
 
 
 class LLMConfig(BaseModel):
@@ -117,6 +119,9 @@ class PurpleStrikeConfig(BaseModel):
     detection_check_delay: int = 30
     max_steps: int = 20
     output_dir: str = "./results"
+    target_ad_domain: str = ""
+    target_username: str = ""
+    target_password: str = ""
 
     @classmethod
     def from_yaml(cls, path: Path) -> PurpleStrikeConfig:
@@ -175,12 +180,19 @@ class PurpleStrikeConfig(BaseModel):
             "PURPLESTRIKE_LLM_BASE_URL": (["llm", "base_url"], str),
             "PURPLESTRIKE_OLLAMA_BASE_URL": (["llm", "base_url"], str),
             "PURPLESTRIKE_VLLM_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_NVIDIA_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_NVIDIA_API_KEY": (["llm", "api_key"], str),
+            "PURPLESTRIKE_NVIDIA_MODEL": (["llm", "model"], str),
             "PURPLESTRIKE_LLM_TEMPERATURE": (["llm", "temperature"], float),
             "PURPLESTRIKE_LLM_MAX_TOKENS": (["llm", "max_tokens"], int),
             "PURPLESTRIKE_DB_PATH": (["db_path"], str),
             "PURPLESTRIKE_DETECTION_CHECK_DELAY": (["detection_check_delay"], int),
             "PURPLESTRIKE_MAX_STEPS": (["max_steps"], int),
             "PURPLESTRIKE_OUTPUT_DIR": (["output_dir"], str),
+            "PURPLESTRIKE_TARGET_AD_DOMAIN": (["target_ad_domain"], str),
+            "PURPLESTRIKE_TARGET_USERNAME": (["target_username"], str),
+            "PURPLESTRIKE_TARGET_PASSWORD": (["target_password"], str),
+            "PURPLESTRIKE_TARGET_GROUPS": (["target_groups"], json.loads),
         }
 
         for env_name, (keys, cast) in env_overrides.items():

@@ -1,4 +1,4 @@
-from .csv_fmt import CsvFormatter
-from .json_fmt import JsonFormatter
+from .csv import CsvFormatter
+from .json import JsonFormatter
 
 __all__ = ["CsvFormatter", "JsonFormatter"]

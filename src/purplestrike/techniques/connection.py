@@ -7,6 +7,17 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+_target_credentials: dict[str, str] = {}
+
+
+def set_target_credentials(
+    domain: str = "", username: str = "", password: str = ""
+) -> None:
+    """Set target credentials to be used by TargetConnection."""
+    _target_credentials["TARGET_AD_DOMAIN"] = domain
+    _target_credentials["TARGET_USERNAME"] = username
+    _target_credentials["TARGET_PASSWORD"] = password
+
 
 class ConnectionError(Exception):
     pass
@@ -27,6 +38,8 @@ class CommandResult:
 
 
 def _get_credential(key: str, default: str = "") -> str:
+    if key in _target_credentials and _target_credentials[key]:
+        return _target_credentials[key]
     val = os.environ.get(f"PURPLESTRIKE_{key}", default)
     if not val:
         val = os.environ.get(key, default)
@@ -51,6 +64,10 @@ class TargetConnection:
     @property
     def os_type(self) -> str:
         return self._os_type
+
+    @property
+    def is_windows(self) -> bool:
+        return self._os_type == "windows"
 
     async def connect(self) -> None:
         if self._os_type == "linux":
@@ -88,7 +105,7 @@ class TargetConnection:
 
     async def _connect_winrm(self) -> None:
         try:
-            import pywinrm
+            import winrm
 
             username = _get_credential("TARGET_USERNAME", "Administrator")
             password = _get_credential("TARGET_PASSWORD", "")
@@ -97,10 +114,12 @@ class TargetConnection:
             if domain and "\\" not in username:
                 username = f"{domain}\\{username}"
 
-            self._winrm_conn = pywinrm.Session(
+            transport = _get_credential("WINRM_TRANSPORT", "kerberos")
+
+            self._winrm_conn = winrm.Session(
                 self.target,
                 auth=(username, password),
-                transport="ntlm",
+                transport=transport,
                 server_cert_validation="ignore",
             )
             logger.info(f"WinRM connected to {self.target}")

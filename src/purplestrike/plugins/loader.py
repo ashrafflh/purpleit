@@ -20,7 +20,7 @@ USER_PLUGIN_BASE = Path.home() / ".purplestrike" / "plugins"
 
 BUILTIN_EXECUTORS = ["custom_python"]
 BUILTIN_SIEM_CONNECTORS = ["wazuh"]
-BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm"]
+BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm", "nvidia"]
 BUILTIN_REPORT_FORMATTERS = ["json", "csv"]
 
 
@@ -76,6 +76,8 @@ class PluginLoader:
                 logger.error(f"Failed to load SIEM connector '{name}': {e}")
 
     async def _load_builtin_llm_providers(self, config: dict[str, Any]) -> None:
+        """Load LLM providers. Only logs individual failures if no provider was loaded."""
+        errors: list[str] = []
         for name in BUILTIN_LLM_PROVIDERS:
             try:
                 module = importlib.import_module(
@@ -83,14 +85,27 @@ class PluginLoader:
                 )
                 cls = getattr(module, f"{self._to_class_name(name)}Provider", None)
                 if cls is None:
-                    logger.warning(f"No provider class found in {name}")
+                    errors.append(f"No provider class found in {name}")
                     continue
                 provider = cls()
-                await provider.setup(config.get(name, {}))
+                prov_logger = logging.getLogger(f"purplestrike.plugins.llm_providers.{name}")
+                old_level = prov_logger.level
+                prov_logger.setLevel(logging.ERROR)
+                try:
+                    await provider.setup(config.get(name, {}))
+                finally:
+                    prov_logger.setLevel(old_level)
                 self.registry.register_llm_provider(provider)
-                logger.info(f"Loaded LLM provider: {name}")
             except Exception as e:
-                logger.error(f"Failed to load LLM provider '{name}': {e}")
+                errors.append(f"Failed to load LLM provider '{name}': {e}")
+
+        loaded = self.registry.list_llm_providers()
+        if not loaded:
+            for err in errors:
+                logger.error(err)
+        else:
+            for name in loaded:
+                logger.info(f"Loaded LLM provider: {name}")
 
     async def _load_builtin_report_formatters(self, config: dict[str, Any]) -> None:
         for name in BUILTIN_REPORT_FORMATTERS:

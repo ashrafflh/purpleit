@@ -8,7 +8,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
-class OpenAIProvider:
+class OpenaiProvider:
     name = "openai"
     model = "gpt-4o"
 
