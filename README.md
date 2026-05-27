@@ -13,7 +13,7 @@ PurpleStrike is an open-source, AI-driven Breach and Attack Simulation (BAS) pla
 
 ## Key Features
 
-- **Autonomous AI Agent** — Plans and chains multi-stage attack paths using LLM reasoning (OpenAI, Anthropic, Ollama, vLLM)
+- **Autonomous AI Agent** — Plans and chains multi-stage attack paths using LLM reasoning (OpenAI, DeepSeek, Anthropic, Ollama, vLLM)
 - **Pre-built Playbooks** — Run defined attack scenarios without AI planning
 - **Hybrid Detection Validation** — Deterministic rule mapping + LLM-powered alert correlation for accurate detection checks
 - **Financial Risk Quantification** — FAIR-inspired model translates detection gaps into dollar-value Annualized Loss Expectancy (ALE)
@@ -58,6 +58,7 @@ uv sync --extra dev
 
 # Install optional LLM providers
 uv sync --extra openai        # OpenAI GPT-4o
+uv sync --extra deepseek      # DeepSeek API
 uv sync --extra anthropic     # Anthropic Claude
 uv sync --extra ollama        # Ollama (local)
 uv sync --extra all           # All optional dependencies
@@ -101,10 +102,12 @@ PURPLESTRIKE_WAZUH_API_TIMEOUT=30
 PURPLESTRIKE_WAZUH_DASHBOARD_URL=https://wazuh-dashboard
 PURPLESTRIKE_WAZUH_DASHBOARD_API_ID=default
 
-# LLM Provider (openai | anthropic | ollama | vllm)
+# LLM Provider (openai | deepseek | anthropic | ollama | vllm | nvidia)
 PURPLESTRIKE_LLM_PROVIDER=openai
 PURPLESTRIKE_OPENAI_API_KEY=<key>
 PURPLESTRIKE_OPENAI_MODEL=gpt-4o
+PURPLESTRIKE_DEEPSEEK_API_KEY=<key>
+PURPLESTRIKE_DEEPSEEK_MODEL=deepseek-chat
 ```
 
 Validate your configuration:
@@ -315,7 +318,7 @@ PurpleStrike uses a **plugin-based modular architecture** with four plugin types
 |---|---|---|
 | **Attack Executor** | Execute techniques on target systems | Custom Python (SSH/WinRM) |
 | **SIEM Connector** | Query alerts and rules from SIEM | Wazuh |
-| **LLM Provider** | Power agent reasoning and alert correlation | OpenAI, Anthropic, Ollama, vLLM |
+| **LLM Provider** | Power agent reasoning and alert correlation | OpenAI, DeepSeek, Anthropic, Ollama, vLLM |
 | **Report Formatter** | Generate output reports | JSON, CSV |
 
 All plugin types follow Python `Protocol` interfaces (runtime-checkable) and are loaded by the `PluginLoader` from built-in packages or user plugin directories (`~/.purplestrike/plugins/`).
