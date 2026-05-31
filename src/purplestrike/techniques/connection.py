@@ -83,7 +83,7 @@ class TargetConnection:
             password = _get_credential("TARGET_PASSWORD", "")
             domain = _get_credential("TARGET_AD_DOMAIN", "")
 
-            if domain and "\\" not in username:
+            if domain and "\\" not in username and "@" not in username:
                 username = f"{domain}\\{username}"
 
             kwargs: dict[str, Any] = {
