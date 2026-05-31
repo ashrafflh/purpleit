@@ -32,12 +32,13 @@ dependencies = [
 
 [project.optional-dependencies]
 openai = ["openai>=1.12.0"]
+deepseek = ["openai>=1.12.0"]
 anthropic = ["anthropic>=0.18.0"]
 ollama = ["ollama>=0.4.0"]
 ssh = ["asyncssh>=2.14.0"]
 winrm = ["pywinrm>=0.4.0"]
 all = [
-    "purplestrike[openai,anthropic,ollama,ssh,winrm]",
+    "purplestrike[openai,deepseek,anthropic,ollama,ssh,winrm]",
 ]
 dev = [
     "pytest>=8.0.0",

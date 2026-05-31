@@ -20,7 +20,7 @@ USER_PLUGIN_BASE = Path.home() / ".purplestrike" / "plugins"
 
 BUILTIN_EXECUTORS = ["custom_python"]
 BUILTIN_SIEM_CONNECTORS = ["wazuh"]
-BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm", "nvidia"]
+BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm", "nvidia", "deepseek"]
 BUILTIN_REPORT_FORMATTERS = ["json", "csv"]
 
 
