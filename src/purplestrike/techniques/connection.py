@@ -111,10 +111,10 @@ class TargetConnection:
             password = _get_credential("TARGET_PASSWORD", "")
             domain = _get_credential("TARGET_AD_DOMAIN", "")
 
-            if domain and "\\" not in username:
-                username = f"{domain}\\{username}"
+            if domain and "@" not in username:
+                username = f"{username}@{domain}"
 
-            transport = _get_credential("WINRM_TRANSPORT", "kerberos")
+            transport = _get_credential("WINRM_TRANSPORT", "ntlm")
 
             self._winrm_conn = winrm.Session(
                 self.target,
@@ -125,7 +125,7 @@ class TargetConnection:
             logger.info(f"WinRM connected to {self.target}")
         except ImportError:
             raise ConnectionError(
-                "pywinrm not installed. Install with: uv sync --extra winrm"
+                "pywinrm not installed. Install with: uv sync"
             )
         except Exception as e:
             raise ConnectionError(f"WinRM connection to {self.target} failed: {e}")
