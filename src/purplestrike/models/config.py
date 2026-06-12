@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -89,6 +90,7 @@ class LLMProviderType(StrEnum):
     OLLAMA = "ollama"
     VLLM = "vllm"
     NVIDIA = "nvidia"
+    DEEPSEEK = "deepseek"
 
 
 class LLMConfig(BaseModel):
@@ -183,6 +185,9 @@ class PurpleStrikeConfig(BaseModel):
             "PURPLESTRIKE_NVIDIA_BASE_URL": (["llm", "base_url"], str),
             "PURPLESTRIKE_NVIDIA_API_KEY": (["llm", "api_key"], str),
             "PURPLESTRIKE_NVIDIA_MODEL": (["llm", "model"], str),
+            "PURPLESTRIKE_DEEPSEEK_BASE_URL": (["llm", "base_url"], str),
+            "PURPLESTRIKE_DEEPSEEK_API_KEY": (["llm", "api_key"], str),
+            "PURPLESTRIKE_DEEPSEEK_MODEL": (["llm", "model"], str),
             "PURPLESTRIKE_LLM_TEMPERATURE": (["llm", "temperature"], float),
             "PURPLESTRIKE_LLM_MAX_TOKENS": (["llm", "max_tokens"], int),
             "PURPLESTRIKE_DB_PATH": (["db_path"], str),

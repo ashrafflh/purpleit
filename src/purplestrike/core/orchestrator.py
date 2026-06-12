@@ -293,6 +293,9 @@ class Orchestrator:
                 await siem_connector.setup(self.config.siem.model_dump())
             except Exception as e:
                 logger.error(f"Failed to connect to SIEM: {e}")
+                with suppress(Exception):
+                    await siem_connector.teardown()
+                siem_connector = None
 
         sim_steps: list[SimulationStep] = []
         execution_target = self._target_for_group(target_group_name or plan.target_group)
