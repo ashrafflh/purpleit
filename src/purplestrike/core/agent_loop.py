@@ -31,7 +31,6 @@ You must respond with a valid JSON object matching this structure:
       "order": 1,
       "technique_id": "T1059.001",
       "technique_name": "PowerShell",
-      "target": "target_hostname",
       "parameters": {},
       "expected_detection_rules": [],
       "risk_level": "medium"
@@ -90,7 +89,7 @@ CONSTRAINTS:
 - Maximum {self.config.max_steps} steps
 - Only use techniques from the available list above
 - Chain techniques in a realistic attack progression
-- Each step must target a host from the target group
+- Do not include a per-step target; PurpleStrike uses the configured target group host
 
 Generate the plan now."""
 
@@ -150,7 +149,6 @@ Generate the plan now."""
                     order=step_data.get("order", len(steps) + 1),
                     technique_id=step_data.get("technique_id", ""),
                     technique_name=step_data.get("technique_name", ""),
-                    target=step_data.get("target", ""),
                     parameters=step_data.get("parameters", {}),
                     expected_detection_rules=step_data.get("expected_detection_rules", []),
                     risk_level=step_data.get("risk_level", "medium"),

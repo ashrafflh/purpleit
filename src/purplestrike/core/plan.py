@@ -10,7 +10,6 @@ class AttackPlanStep(BaseModel):
     order: int
     technique_id: str
     technique_name: str = ""
-    target: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     expected_detection_rules: list[str] = Field(default_factory=list)
     risk_level: str = "medium"

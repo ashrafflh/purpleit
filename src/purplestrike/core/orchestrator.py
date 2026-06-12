@@ -58,8 +58,13 @@ class Orchestrator:
         technique_ids: list[str] | None = None,
     ) -> AttackPlan | None:
         if mode == "playbook":
-            return await self._generate_playbook_plan(playbook_path, playbook_name)
-        return await self._generate_agent_plan(target_group_name, tactics, technique_ids)
+            plan = await self._generate_playbook_plan(playbook_path, playbook_name)
+        else:
+            plan = await self._generate_agent_plan(target_group_name, tactics, technique_ids)
+
+        if plan is None:
+            return None
+        return self._normalize_plan_targets(plan, target_group_name)
 
     async def _generate_playbook_plan(
         self,
@@ -93,7 +98,6 @@ class Orchestrator:
                 order=step_data.get("order", len(steps) + 1),
                 technique_id=step_data.get("technique_id", ""),
                 technique_name=step_data.get("technique_name", ""),
-                target=step_data.get("target", ""),
                 parameters=step_data.get("parameters", {}),
                 expected_detection_rules=step_data.get("expected_detection_rules", []),
                 risk_level=step_data.get("risk_level", "medium"),
@@ -156,18 +160,12 @@ class Orchestrator:
         if technique_ids:
             techniques = [t for t in techniques if t.technique_id in technique_ids]
 
-        target_group = self.config.target_groups.get(target_group_name)
-        default_target = (
-            target_group.hosts[0].hostname if target_group and target_group.hosts else ""
-        )
-
         steps = []
         for i, t in enumerate(techniques[: self.config.max_steps], 1):
             steps.append(AttackPlanStep(
                 order=i,
                 technique_id=t.technique_id,
                 technique_name=t.name,
-                target=default_target,
                 parameters={},
                 expected_detection_rules=[dm.rule_id for dm in t.detection_mappings],
                 risk_level=t.risk_level,
@@ -179,15 +177,40 @@ class Orchestrator:
             target_group=target_group_name,
         )
 
+    def _normalize_plan_targets(
+        self,
+        plan: AttackPlan,
+        target_group_name: str,
+    ) -> AttackPlan:
+        effective_group_name = target_group_name or plan.target_group
+        plan.target_group = effective_group_name
+        return plan
+
+    def _target_for_group(self, target_group_name: str = "") -> str:
+        if not target_group_name:
+            raise ValueError("Target group name is required")
+        target_group = self.config.target_groups.get(target_group_name)
+        if target_group is None:
+            available = ", ".join(self.config.target_groups.keys()) or "none"
+            raise ValueError(
+                f"Target group '{target_group_name}' not found in config. "
+                f"Available groups: {available}"
+            )
+        if not target_group.hosts:
+            raise ValueError(f"Target group '{target_group_name}' has no hosts configured")
+        return target_group.hosts[0].hostname
+
     def display_plan(self, plan: AttackPlan) -> bool:
         console.print(f"\n[bold]Plan: {plan.name}[/bold]")
+        target = self._target_for_group(plan.target_group)
+        if target:
+            console.print(f"Target host: {target}")
         console.print(f"Total steps: {len(plan.steps)}\n")
 
         table = Table()
         table.add_column("#", style="bold")
         table.add_column("Technique ID")
         table.add_column("Technique Name")
-        table.add_column("Target")
         table.add_column("Risk")
 
         for step in plan.steps:
@@ -198,7 +221,6 @@ class Orchestrator:
                 str(step.order),
                 step.technique_id,
                 step.technique_name,
-                step.target,
                 (
                     f"[{risk_style}]{step.risk_level}[/{risk_style}]"
                     if risk_style
@@ -237,6 +259,8 @@ class Orchestrator:
             logger.error("Failed to generate plan")
             return None
 
+        self._plan = plan
+
         if not self.display_plan(plan):
             console.print("[yellow]Plan rejected. Aborting.[/yellow]")
             return None
@@ -271,6 +295,7 @@ class Orchestrator:
                 logger.error(f"Failed to connect to SIEM: {e}")
 
         sim_steps: list[SimulationStep] = []
+        execution_target = self._target_for_group(target_group_name or plan.target_group)
         for i, plan_step in enumerate(plan.steps, 1):
             if self._stop_requested:
                 simulation.status = SimulationStatus.ABORTED
@@ -280,7 +305,11 @@ class Orchestrator:
                           f"{plan_step.technique_id} {plan_step.technique_name}...")
 
             step_start = datetime.now(UTC)
-            technique_result = await self._execute_step(plan_step, plugin_registry)
+            technique_result = await self._execute_step(
+                plan_step,
+                plugin_registry,
+                target=execution_target,
+            )
             step_end = datetime.now(UTC)
 
             exec_status = (
@@ -296,6 +325,7 @@ class Orchestrator:
                 detection_result = await self._validate_detection(
                     siem_connector=siem_connector,
                     plan_step=plan_step,
+                    target=execution_target,
                     start_time=step_start,
                     end_time=step_end,
                     plugin_registry=plugin_registry,
@@ -321,7 +351,7 @@ class Orchestrator:
                 technique_id=plan_step.technique_id,
                 technique_name=plan_step.technique_name,
                 tactic=self._get_tactic_for_technique(plan_step.technique_id),
-                target=plan_step.target,
+                target=execution_target,
                 execution_status=exec_status,
                 execution_time_seconds=technique_result.execution_time_seconds,
                 detection_result=detection_result,
@@ -333,7 +363,7 @@ class Orchestrator:
                 await siem_connector.teardown()
 
         if not skip_cleanup:
-            await self._cleanup_all(plan, plugin_registry)
+            await self._cleanup_all(plan, plugin_registry, target=execution_target)
 
         simulation.steps = sim_steps
         summary = SimulationSummary.from_steps(sim_steps)
@@ -371,6 +401,7 @@ class Orchestrator:
         self,
         plan_step: AttackPlanStep,
         plugin_registry: Any,
+        target: str,
     ) -> TechniqueResult:
         import time
 
@@ -391,7 +422,7 @@ class Orchestrator:
         try:
             result = await executor.execute(
                 technique_id=plan_step.technique_id,
-                target=plan_step.target,
+                target=target,
                 parameters=plan_step.parameters,
             )
         except Exception as e:
@@ -408,6 +439,7 @@ class Orchestrator:
         self,
         siem_connector: Any,
         plan_step: AttackPlanStep,
+        target: str,
         start_time: datetime,
         end_time: datetime,
         plugin_registry: Any,
@@ -423,7 +455,7 @@ class Orchestrator:
         return await engine.validate_step(
             technique_id=plan_step.technique_id,
             expected_rules=plan_step.expected_detection_rules,
-            target=plan_step.target,
+            target=target,
             start_time=start_time,
             end_time=end_time,
         )
@@ -441,16 +473,16 @@ class Orchestrator:
         from purplestrike.models.techniques import TacticID
         return TacticID.INITIAL_ACCESS
 
-    async def _cleanup_all(self, plan: AttackPlan, plugin_registry: Any) -> None:
+    async def _cleanup_all(self, plan: AttackPlan, plugin_registry: Any, target: str) -> None:
         for step in plan.steps:
             for executor_name in plugin_registry.list_attack_executors():
                 executor = plugin_registry.get_attack_executor(executor_name)
                 if executor and step.technique_id in executor.supported_techniques:
                     try:
-                        await executor.cleanup(step.technique_id, step.target)
+                        await executor.cleanup(step.technique_id, target)
                     except Exception as e:
                         logger.warning(
-                            f"Cleanup failed for {step.technique_id} on {step.target}: {e}"
+                            f"Cleanup failed for {step.technique_id} on {target}: {e}"
                         )
 
     def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
