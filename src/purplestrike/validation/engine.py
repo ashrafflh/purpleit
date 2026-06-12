@@ -37,6 +37,10 @@ class DetectionValidationEngine:
         end_time: datetime,
     ) -> DetectionResult:
         try:
+            effective_rules = await self._expected_rules_for_technique(
+                technique_id,
+                expected_rules,
+            )
             alerts = await self.siem_connector.query_alerts(
                 start_time=start_time,
                 end_time=end_time,
@@ -55,11 +59,15 @@ class DetectionValidationEngine:
                 alerts=[],
             )
 
-        matched_rules, matched_alerts = self._rule_based_check(alerts, expected_rules)
+        matched_rules, matched_alerts = self._rule_based_check(
+            alerts,
+            effective_rules,
+            technique_id,
+        )
 
         if matched_rules:
             status = DetectionStatus.DETECTED
-            confidence = 1.0 if len(matched_rules) == len(expected_rules) else 0.7
+            confidence = 1.0 if self._has_mitre_match(matched_alerts, technique_id) else 0.7
             return DetectionResult(
                 status=status,
                 confidence=confidence,
@@ -75,21 +83,53 @@ class DetectionValidationEngine:
             alerts=alerts,
         )
 
+    async def _expected_rules_for_technique(
+        self,
+        technique_id: str,
+        expected_rules: list[str],
+    ) -> list[str]:
+        rule_ids = list(dict.fromkeys(str(rule_id) for rule_id in expected_rules))
+        get_rules = getattr(self.siem_connector, "get_rules_for_technique", None)
+        if get_rules is None:
+            return rule_ids
+
+        try:
+            for rule in await get_rules(technique_id):
+                if rule.rule_id not in rule_ids:
+                    rule_ids.append(rule.rule_id)
+        except Exception as e:
+            logger.warning(f"Failed to retrieve SIEM rules for {technique_id}: {e}")
+        return rule_ids
+
     def _rule_based_check(
         self,
         alerts: list[SIEMAlert],
         expected_rules: list[str],
+        technique_id: str,
     ) -> tuple[list[str], list[SIEMAlert]]:
         matched_rules: list[str] = []
         matched_alerts: list[SIEMAlert] = []
+        expected_rule_set = {str(rule_id) for rule_id in expected_rules}
 
         for alert in alerts:
-            if alert.rule_id in expected_rules:
+            if str(alert.rule_id) in expected_rule_set or self._alert_matches_technique(
+                alert,
+                technique_id,
+            ):
                 if alert.rule_id not in matched_rules:
                     matched_rules.append(alert.rule_id)
                 matched_alerts.append(alert)
 
         return matched_rules, matched_alerts
+
+    def _alert_matches_technique(self, alert: SIEMAlert, technique_id: str) -> bool:
+        return any(
+            mitre_id == technique_id or mitre_id.startswith(f"{technique_id}.")
+            for mitre_id in alert.mitre_technique_ids
+        )
+
+    def _has_mitre_match(self, alerts: list[SIEMAlert], technique_id: str) -> bool:
+        return any(self._alert_matches_technique(alert, technique_id) for alert in alerts)
 
     async def _ai_correlate(
         self,
@@ -108,18 +148,18 @@ class DetectionValidationEngine:
 
         from purplestrike.plugins.protocols import LLMProvider
 
-        llm_provider = None
-        for provider_name in self.plugin_registry.list_llm_providers():
-            candidate = self.plugin_registry.get_llm_provider(provider_name)
-            if isinstance(candidate, LLMProvider):
-                llm_provider = candidate
-                break
+        configured_provider = self.config.llm.provider.value
+        candidate = self.plugin_registry.get_llm_provider(configured_provider)
+        llm_provider = candidate if isinstance(candidate, LLMProvider) else None
 
         if llm_provider is None:
             return DetectionResult(
                 status=DetectionStatus.NOT_DETECTED if not alerts else DetectionStatus.UNKNOWN,
                 confidence=0.0,
                 matched_alerts=alerts if alerts else [],
+                ai_correlation_reasoning=(
+                    f"Configured LLM provider '{configured_provider}' is not loaded."
+                ),
             )
 
         technique_info = self._get_technique_info(technique_id)
@@ -174,6 +214,7 @@ Respond with a JSON object:
             return DetectionResult(
                 status=DetectionStatus.NOT_DETECTED if not alerts else DetectionStatus.UNKNOWN,
                 confidence=0.0,
+                matched_alerts=alerts if alerts else [],
             )
 
     def _get_technique_info(self, technique_id: str) -> str:

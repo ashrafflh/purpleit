@@ -208,7 +208,18 @@ class WazuhConnector:
         if rule_ids:
             filters.append({"terms": {"rule.id": [self._coerce_rule_id(r) for r in rule_ids]}})
         if source:
-            filters.append({"term": {"agent.name": source}})
+            filters.append(
+                {
+                    "bool": {
+                        "should": [
+                            {"term": {"agent.name": source}},
+                            {"term": {"agent.ip": source}},
+                            {"term": {"agent.id": source}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            )
 
         payload = {
             "params": {
@@ -291,7 +302,7 @@ class WazuhConnector:
             timestamp=datetime.fromisoformat(raw.get("timestamp", datetime.now().isoformat())),
             rule_id=str(rule_data.get("id", "")),
             rule_description=rule_data.get("description", ""),
-            severity=rule_data.get("level", ""),
+            severity=str(rule_data.get("level", "")),
             source=raw.get("agent", {}).get("name", ""),
             mitre_technique_ids=mitre_ids,
             raw_log=raw,

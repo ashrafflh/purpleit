@@ -20,7 +20,7 @@ USER_PLUGIN_BASE = Path.home() / ".purplestrike" / "plugins"
 
 BUILTIN_EXECUTORS = ["custom_python"]
 BUILTIN_SIEM_CONNECTORS = ["wazuh"]
-BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm", "nvidia"]
+BUILTIN_LLM_PROVIDERS = ["openai", "anthropic", "ollama", "vllm", "nvidia", "deepseek"]
 BUILTIN_REPORT_FORMATTERS = ["json", "csv"]
 
 
@@ -76,9 +76,13 @@ class PluginLoader:
                 logger.error(f"Failed to load SIEM connector '{name}': {e}")
 
     async def _load_builtin_llm_providers(self, config: dict[str, Any]) -> None:
-        """Load LLM providers. Only logs individual failures if no provider was loaded."""
+        """Load configured LLM providers, or all built-ins when no config is supplied."""
         errors: list[str] = []
-        for name in BUILTIN_LLM_PROVIDERS:
+        provider_names = list(config.keys()) if config else BUILTIN_LLM_PROVIDERS
+        for name in provider_names:
+            if name not in BUILTIN_LLM_PROVIDERS:
+                errors.append(f"Unknown LLM provider '{name}'")
+                continue
             try:
                 module = importlib.import_module(
                     f"purplestrike.plugins.llm_providers.{name}"

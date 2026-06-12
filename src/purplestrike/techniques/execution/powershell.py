@@ -8,18 +8,20 @@ from purplestrike.techniques.connection import TargetConnection, get_connection
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_COMMAND = "Invoke-Command -ScriptBlock { whoami }"
+
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     """Execute a PowerShell command on the target."""
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        command = parameters.get("command", "")
+        command = (parameters.get("command") or DEFAULT_COMMAND).strip()
         encoded = parameters.get("encoded", False)
         if encoded:
             import base64
             encoded_cmd = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
-            ps_command = f"powershell -EncodedCommand {encoded_cmd}"
+            ps_command = f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded_cmd}"
         else:
             ps_command = command
         result = await conn.run_ps(ps_command)

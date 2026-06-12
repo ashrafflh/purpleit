@@ -325,12 +325,13 @@ class Orchestrator:
             if siem_connector:
                 import asyncio
                 await asyncio.sleep(self.config.detection_check_delay)
+                validation_end = datetime.now(UTC)
                 detection_result = await self._validate_detection(
                     siem_connector=siem_connector,
                     plan_step=plan_step,
                     target=execution_target,
                     start_time=step_start,
-                    end_time=step_end,
+                    end_time=validation_end,
                     plugin_registry=plugin_registry,
                 )
 

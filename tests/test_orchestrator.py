@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 import pytest
@@ -14,6 +15,7 @@ from purplestrike.models.config import (
     TargetHost,
 )
 from purplestrike.models.techniques import TechniqueResult
+from purplestrike.models.simulation import DetectionResult, DetectionStatus
 
 
 def _config(hostname: str = "10.10.1.108", ip: str = "10.10.1.108") -> PurpleStrikeConfig:
@@ -261,3 +263,118 @@ async def test_execute_disables_siem_validation_when_setup_fails(monkeypatch) ->
     assert report is not None
     assert siem.teardown_called is True
     assert siem.query_called is False
+
+
+@pytest.mark.asyncio
+async def test_execute_validation_window_includes_detection_delay(monkeypatch) -> None:
+    class RecordingSIEMConnector:
+        name = "wazuh"
+
+        async def setup(self, config: dict[str, Any]) -> None:
+            return None
+
+        async def teardown(self) -> None:
+            return None
+
+    class RecordingSIEMRegistry:
+        def __init__(self, executor: RecordingExecutor, siem: RecordingSIEMConnector) -> None:
+            self.executor = executor
+            self.siem = siem
+
+        def find_executor_for_technique(self, technique_id: str) -> RecordingExecutor | None:
+            return self.executor if technique_id == "T1059.001" else None
+
+        def get_attack_executor(self, name: str) -> RecordingExecutor | None:
+            return self.executor if name == "recording" else None
+
+        def list_attack_executors(self) -> list[str]:
+            return ["recording"]
+
+        def get_siem_connector(self, name: str) -> RecordingSIEMConnector | None:
+            return self.siem if name == "wazuh" else None
+
+        def get_report_formatter(self, name: str) -> None:
+            return None
+
+        def list_llm_providers(self) -> list[str]:
+            return []
+
+    class RecordingOrchestrator(Orchestrator):
+        def __init__(self, config: PurpleStrikeConfig) -> None:
+            super().__init__(config)
+            self.step_end_seen: datetime | None = None
+            self.validation_end_seen: datetime | None = None
+
+        async def generate_plan(
+            self,
+            mode: str = "agent",
+            target_group_name: str = "",
+            playbook_path: Any = None,
+            playbook_name: str | None = None,
+            tactics: list[str] | None = None,
+            technique_ids: list[str] | None = None,
+        ) -> AttackPlan | None:
+            return AttackPlan(
+                name="Timing Plan",
+                target_group="purple.local",
+                steps=[
+                    AttackPlanStep(
+                        order=1,
+                        technique_id="T1059.001",
+                        technique_name="PowerShell",
+                    ),
+                ],
+            )
+
+        def display_plan(self, plan: AttackPlan) -> bool:
+            return True
+
+        async def _execute_step(
+            self,
+            plan_step: AttackPlanStep,
+            plugin_registry: Any,
+            target: str,
+        ) -> TechniqueResult:
+            self.step_end_seen = datetime.now(UTC)
+            return TechniqueResult(technique_id=plan_step.technique_id, success=True)
+
+        async def _validate_detection(
+            self,
+            siem_connector: Any,
+            plan_step: AttackPlanStep,
+            target: str,
+            start_time: datetime,
+            end_time: datetime,
+            plugin_registry: Any,
+        ) -> DetectionResult:
+            self.validation_end_seen = end_time
+            return DetectionResult(status=DetectionStatus.UNKNOWN)
+
+    async def noop_load_all(self: Any, config: dict[str, Any] | None = None) -> None:
+        return None
+
+    async def fast_sleep(seconds: float) -> None:
+        return None
+
+    from purplestrike.plugins import loader as loader_module
+    from purplestrike.plugins import registry as registry_module
+    import asyncio
+
+    executor = RecordingExecutor()
+    siem = RecordingSIEMConnector()
+    monkeypatch.setattr(loader_module.PluginLoader, "load_all", noop_load_all)
+    monkeypatch.setattr(registry_module, "plugin_registry", RecordingSIEMRegistry(executor, siem))
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    config = _config()
+    config.siem.connector = "wazuh"
+    config.detection_check_delay = 30
+    config.output_dir = ""
+    orchestrator = RecordingOrchestrator(config=config)
+
+    report = await orchestrator.execute(target_group_name="purple.local", skip_cleanup=True)
+
+    assert report is not None
+    assert orchestrator.step_end_seen is not None
+    assert orchestrator.validation_end_seen is not None
+    assert orchestrator.validation_end_seen >= orchestrator.step_end_seen

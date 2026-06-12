@@ -46,6 +46,13 @@ def _get_credential(key: str, default: str = "") -> str:
     return val
 
 
+def _get_winrm_transport(password: str) -> str:
+    transport = _get_credential("WINRM_TRANSPORT", "").strip()
+    if transport:
+        return transport
+    return "ntlm" if password else "kerberos"
+
+
 def _target_os(target: str) -> str:
     if any(indicator in target.lower() for indicator in ("linux", "lnx", "ubuntu", "centos", "rhel")):
         return "linux"
@@ -114,7 +121,7 @@ class TargetConnection:
             if domain and "\\" not in username:
                 username = f"{domain}\\{username}"
 
-            transport = _get_credential("WINRM_TRANSPORT", "kerberos")
+            transport = _get_winrm_transport(password)
 
             self._winrm_conn = winrm.Session(
                 self.target,
