@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
@@ -18,31 +16,23 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        tmp_dir = (
-            f"$env:TEMP\\purplestrike; "
-            f"if (-not (Test-Path $env:TEMP\\purplestrike)) "
-            f"{{ New-Item -ItemType Directory -Path $env:TEMP\\purplestrike }}"
-        )
-        artifact_content = (
-            "PK\\x00\\x00\\x00\\x00"
-        )
         create_cmd = (
-            f"{tmp_dir}; "
-            f"$macroMarker = 'Sub AutoOpen()`n"
-            f"' PurpleStrike-SIMULATION-Marker-DO-NOT-EXECUTE `n"
-            f"' End Sub'; "
-            f"$docmContent = @"
-            f"\nPURPLESTRIKE PHISHING SIMULATION ARTIFACT`n"
-            f"This file is a simulation marker created by PurpleStrike.`n"
-            f"technique_id: T1566.001`n"
-            f"NO REAL MALICIOUS CONTENT`n`n"
-            f"$macroMarker`n"
-            f"@; "
-            f"Set-Content -Path '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' "
-            f"-Value $docmContent -Encoding UTF8; "
-            f"Write-Output 'Artifact created:'; "
-            f"Get-Item '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' | "
-            f"Select-Object FullName,Length,LastWriteTime | Format-List"
+            "$artifactDir = Join-Path $env:TEMP 'purplestrike'; "
+            "if (-not (Test-Path -LiteralPath $artifactDir)) { "
+            "New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null }; "
+            f"$artifactPath = Join-Path $artifactDir '{ARTIFACT_NAME}'; "
+            "$macroMarker = 'Sub AutoOpen()' + [Environment]::NewLine + "
+            "'PurpleStrike-SIMULATION-Marker-DO-NOT-EXECUTE' + [Environment]::NewLine + "
+            "'End Sub'; "
+            "$docmContent = 'PURPLESTRIKE PHISHING SIMULATION ARTIFACT' + [Environment]::NewLine + "
+            "'This file is a simulation marker created by PurpleStrike.' + [Environment]::NewLine + "
+            "'technique_id: T1566.001' + [Environment]::NewLine + "
+            "'NO REAL MALICIOUS CONTENT' + [Environment]::NewLine + "
+            "[Environment]::NewLine + $macroMarker + [Environment]::NewLine; "
+            "Set-Content -LiteralPath $artifactPath -Value $docmContent -Encoding UTF8; "
+            "Write-Output 'Artifact created:'; "
+            "Get-Item -LiteralPath $artifactPath | "
+            "Select-Object FullName,Length,LastWriteTime | Format-List"
         )
         result = await conn.run_ps(create_cmd)
         return TechniqueResult(
@@ -71,12 +61,13 @@ async def cleanup(target: str) -> None:
     try:
         conn = await get_connection(target)
         await conn.run_ps(
-            f"Remove-Item -Path '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' "
-            f"-Force -ErrorAction SilentlyContinue; "
-            f"if ((Get-ChildItem '$env:TEMP\\purplestrike' -ErrorAction SilentlyContinue "
-            f"| Measure-Object).Count -eq 0) {{ "
-            f"Remove-Item -Path '$env:TEMP\\purplestrike' -Force -Recurse "
-            f"-ErrorAction SilentlyContinue }}"
+            "$artifactDir = Join-Path $env:TEMP 'purplestrike'; "
+            f"$artifactPath = Join-Path $artifactDir '{ARTIFACT_NAME}'; "
+            "Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue; "
+            "if ((Test-Path -LiteralPath $artifactDir) -and "
+            "((Get-ChildItem -LiteralPath $artifactDir -ErrorAction SilentlyContinue | "
+            "Measure-Object).Count -eq 0)) { "
+            "Remove-Item -LiteralPath $artifactDir -Force -Recurse -ErrorAction SilentlyContinue }"
         )
     except Exception as e:
         logger.warning(f"T1566.001 cleanup failed: {e}")

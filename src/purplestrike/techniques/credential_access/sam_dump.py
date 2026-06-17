@@ -4,7 +4,12 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import (
+    TargetConnection,
+    command_error,
+    get_connection,
+    is_transport_failure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,14 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         ]
         if access_output:
             output_parts.append(access_output)
+        if is_transport_failure(access_result):
+            return TechniqueResult(
+                technique_id="T1003.002",
+                success=False,
+                output="\n".join(output_parts)[:4096],
+                error=command_error(access_result)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
 
         if method == "registry":
             sim_result = await conn.run_ps(
@@ -53,6 +66,14 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 success=False,
                 error=f"Unsupported SAM dump method: {method}",
                 output="\n".join(output_parts)[:4096],
+                execution_status=ExecutionStatus.FAILURE,
+            )
+        if is_transport_failure(sim_result):
+            return TechniqueResult(
+                technique_id="T1003.002",
+                success=False,
+                output="\n".join(output_parts)[:4096],
+                error=command_error(sim_result)[:1024],
                 execution_status=ExecutionStatus.FAILURE,
             )
 

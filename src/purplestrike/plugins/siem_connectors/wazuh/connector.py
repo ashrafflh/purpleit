@@ -270,19 +270,37 @@ class WazuhConnector:
 
         params: dict[str, Any] = {"limit": 500}
         if technique_id:
-            params["search"] = technique_id
+            params["mitre"] = technique_id
 
         try:
             response = await self._request("GET", "/rules", params=params)
             response.raise_for_status()
             data = response.json()
-            items = data.get("data", {}).get("affected_items", [])
-            if technique_id:
-                items = [r for r in items if self._rule_matches_technique(r, technique_id)]
-            return [self._parse_rule(r) for r in items]
+        except httpx.HTTPStatusError as e:
+            if technique_id and e.response.status_code >= 500:
+                logger.warning(
+                    "Wazuh rejected /rules mitre filter for %s; falling back to local filtering: %s",
+                    technique_id,
+                    e,
+                )
+                try:
+                    response = await self._request("GET", "/rules", params={"limit": 500})
+                    response.raise_for_status()
+                    data = response.json()
+                except Exception as fallback_error:
+                    logger.error(f"Failed to get rules for technique {technique_id}: {fallback_error}")
+                    return []
+            else:
+                logger.error(f"Failed to get rules for technique {technique_id}: {e}")
+                return []
         except Exception as e:
             logger.error(f"Failed to get rules for technique {technique_id}: {e}")
             return []
+
+        items = data.get("data", {}).get("affected_items", [])
+        if technique_id:
+            items = [r for r in items if self._rule_matches_technique(r, technique_id)]
+        return [self._parse_rule(r) for r in items]
 
     async def teardown(self) -> None:
         if self._client:

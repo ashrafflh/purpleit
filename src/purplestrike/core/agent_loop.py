@@ -108,15 +108,29 @@ Generate the plan now."""
             techniques = [t for t in techniques if t.tactic in tactics]
         if technique_ids:
             techniques = [t for t in techniques if t.technique_id in technique_ids]
+        target_os = self._primary_target_os()
+        if target_os:
+            techniques = [t for t in techniques if target_os in t.target_os]
         return [t for t in techniques if t.safe_to_execute]
+
+    def _primary_target_os(self) -> str | None:
+        if not self.target_group.hosts:
+            return None
+        return str(self.target_group.hosts[0].os)
 
     def _format_techniques(self, techniques: list[Technique]) -> str:
         lines = []
         for t in techniques:
             params_str = ""
             if t.parameters:
-                param_names = [p.name for p in t.parameters if p.required]
-                params_str = f" (required params: {', '.join(param_names)})" if param_names else ""
+                parts = []
+                for p in t.parameters:
+                    required = "required" if p.required else "optional"
+                    if p.default is None:
+                        parts.append(f"{p.name}={required}")
+                    else:
+                        parts.append(f"{p.name}={required}, default={p.default!r}")
+                params_str = f" (params: {'; '.join(parts)})"
             lines.append(f"- {t.technique_id}: {t.name} [{t.tactic}]{params_str}")
         return "\n".join(lines)
 

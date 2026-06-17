@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,14 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         verify = await conn.run_ps(
             f"Get-Service -Name '{service_name}' | Format-List Name,Status,StartType"
         )
+        if not verify.success:
+            return TechniqueResult(
+                technique_id="T1543.003",
+                success=False,
+                output=verify.stdout[:4096],
+                error=command_error(verify)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
         return TechniqueResult(
             technique_id="T1543.003",
             success=True,

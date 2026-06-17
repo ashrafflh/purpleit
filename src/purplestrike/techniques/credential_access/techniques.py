@@ -104,6 +104,7 @@ CREDENTIAL_ACCESS_TECHNIQUES = [
             description="Account to target",
             type="string",
             required=True,
+            default="Administrator",
         ),
         TechniqueParameter(
             name="password_list",
@@ -144,12 +145,14 @@ CREDENTIAL_ACCESS_TECHNIQUES = [
             description="Password to spray",
             type="string",
             required=True,
+            default="PurpleStrikeInvalid123!",
         ),
         TechniqueParameter(
             name="account_list",
             description="Path to account list",
             type="string",
             required=True,
+            default="Administrator",
         ),
         TechniqueParameter(
             name="delay_seconds",

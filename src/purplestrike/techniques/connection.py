@@ -8,6 +8,17 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _target_credentials: dict[str, str] = {}
+_WINRM_MAX_ATTEMPTS = 3
+_WINRM_TRANSIENT_MARKERS = (
+    "connecttimeouterror",
+    "connection to",
+    "httpconnectionpool",
+    "max retries exceeded",
+    "read timed out",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+)
 
 
 def set_target_credentials(
@@ -57,6 +68,21 @@ def _target_os(target: str) -> str:
     if any(indicator in target.lower() for indicator in ("linux", "lnx", "ubuntu", "centos", "rhel")):
         return "linux"
     return "windows"
+
+
+def _is_transient_winrm_error(error: Exception) -> bool:
+    return any(marker in str(error).lower() for marker in _WINRM_TRANSIENT_MARKERS)
+
+
+def command_error(result: CommandResult, default: str = "Remote command failed") -> str:
+    return result.stderr or result.stdout or default
+
+
+def is_transport_failure(result: CommandResult) -> bool:
+    if result.success:
+        return False
+    message = command_error(result, "").lower()
+    return any(marker in message for marker in _WINRM_TRANSIENT_MARKERS)
 
 
 class TargetConnection:
@@ -168,21 +194,8 @@ class TargetConnection:
         except asyncio.TimeoutError:
             return CommandResult(stdout="", stderr="Command timed out", exit_code=124)
 
-    async def _run_winrm(
-        self, command: str, timeout: int = 60
-    ) -> CommandResult:
-        try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._winrm_conn.run_ps(command),
-            )
-            return CommandResult(
-                stdout=result.std_out.decode("utf-8", errors="replace") if result.std_out else "",
-                stderr=result.std_err.decode("utf-8", errors="replace") if result.std_err else "",
-                exit_code=result.status_code or 0,
-            )
-        except Exception as e:
-            return CommandResult(stdout="", stderr=str(e), exit_code=1)
+    async def _run_winrm(self, command: str, timeout: int = 60) -> CommandResult:
+        return await self._run_winrm_with_retries(command, timeout)
 
     async def run_ps(self, script: str, timeout: int = 60) -> CommandResult:
         if self._winrm_conn is not None:
@@ -196,18 +209,37 @@ class TargetConnection:
         raise ConnectionError(f"Not connected to {self.target}")
 
     async def _run_winrm_ps(self, script: str, timeout: int = 60) -> CommandResult:
-        try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: self._winrm_conn.run_ps(script),
-            )
-            return CommandResult(
-                stdout=result.std_out.decode("utf-8", errors="replace") if result.std_out else "",
-                stderr=result.std_err.decode("utf-8", errors="replace") if result.std_err else "",
-                exit_code=result.status_code or 0,
-            )
-        except Exception as e:
-            return CommandResult(stdout="", stderr=str(e), exit_code=1)
+        return await self._run_winrm_with_retries(script, timeout)
+
+    async def _run_winrm_with_retries(self, script: str, timeout: int) -> CommandResult:
+        last_error: Exception | None = None
+        for attempt in range(1, _WINRM_MAX_ATTEMPTS + 1):
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.get_event_loop().run_in_executor(
+                        None,
+                        lambda: self._winrm_conn.run_ps(script),
+                    ),
+                    timeout=timeout,
+                )
+                return CommandResult(
+                    stdout=result.std_out.decode("utf-8", errors="replace") if result.std_out else "",
+                    stderr=result.std_err.decode("utf-8", errors="replace") if result.std_err else "",
+                    exit_code=result.status_code or 0,
+                )
+            except Exception as e:
+                last_error = e
+                if attempt >= _WINRM_MAX_ATTEMPTS or not _is_transient_winrm_error(e):
+                    break
+                logger.warning(
+                    "Transient WinRM error on %s attempt %s/%s: %s",
+                    self.target,
+                    attempt,
+                    _WINRM_MAX_ATTEMPTS,
+                    e,
+                )
+                await asyncio.sleep(2)
+        return CommandResult(stdout="", stderr=str(last_error), exit_code=1)
 
     async def upload(self, local_path: str, remote_path: str) -> None:
         if self._ssh_conn is not None:

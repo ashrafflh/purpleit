@@ -44,6 +44,7 @@ class RecordingExecutor:
 
     def __init__(self) -> None:
         self.received_target = ""
+        self.cleanup_parameters: dict[str, Any] | None = None
 
     async def execute(
         self,
@@ -53,6 +54,14 @@ class RecordingExecutor:
     ) -> TechniqueResult:
         self.received_target = target
         return TechniqueResult(technique_id=technique_id, success=True)
+
+    async def cleanup(
+        self,
+        technique_id: str,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
+        self.cleanup_parameters = parameters
 
 
 class RecordingRegistry:
@@ -64,6 +73,9 @@ class RecordingRegistry:
 
     def get_attack_executor(self, name: str) -> RecordingExecutor | None:
         return self.executor if name == "recording" else None
+
+    def list_attack_executors(self) -> list[str]:
+        return ["recording"]
 
 
 class FailingSIEMConnector:
@@ -143,6 +155,53 @@ def test_target_for_group_uses_configured_hostname() -> None:
     assert orchestrator._target_for_group("purple.local") == "configured-host"
 
 
+def test_default_plan_populates_required_parameter_defaults() -> None:
+    orchestrator = Orchestrator(config=_config())
+
+    plan = orchestrator._generate_default_plan(
+        target_group_name="purple.local",
+        tactics=None,
+        technique_ids=["T1047", "T1136.002", "T1543.003"],
+    )
+
+    parameters_by_id = {step.technique_id: step.parameters for step in plan.steps}
+    assert parameters_by_id["T1047"]["command"] == "whoami"
+    assert parameters_by_id["T1136.002"] == {
+        "username": "purplestrike_domain",
+        "domain": "purple.local",
+    }
+    assert parameters_by_id["T1543.003"] == {
+        "service_name": "PurpleStrikePrivEscSvc",
+        "binary_path": "C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike",
+    }
+
+
+def test_default_plan_filters_steps_for_target_os() -> None:
+    orchestrator = Orchestrator(config=_config())
+
+    plan = orchestrator._generate_default_plan(
+        target_group_name="purple.local",
+        tactics=None,
+        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+    )
+
+    assert [step.technique_id for step in plan.steps] == ["T1059.001"]
+
+
+@pytest.mark.asyncio
+async def test_generate_plan_default_mode_is_deterministic_and_os_filtered() -> None:
+    orchestrator = Orchestrator(config=_config())
+
+    plan = await orchestrator.generate_plan(
+        mode="default",
+        target_group_name="purple.local",
+        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+    )
+
+    assert plan is not None
+    assert [step.technique_id for step in plan.steps] == ["T1059.001"]
+
+
 @pytest.mark.asyncio
 async def test_execute_step_passes_configured_target_to_executor() -> None:
     orchestrator = Orchestrator(config=_config())
@@ -207,11 +266,96 @@ async def test_execute_loop_uses_config_target_group_for_execute_step() -> None:
     config.output_dir = ""
     orchestrator = RecordingOrchestrator(config=config)
 
-    report = await orchestrator.execute(target_group_name="purple.local", skip_cleanup=True)
+    report = await orchestrator.execute(
+        target_group_name="purple.local",
+        skip_cleanup=True,
+    )
 
     assert orchestrator.received_target == "10.10.1.108"
     assert report is not None
     assert report.results[0].target == "10.10.1.108"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_receives_plan_parameters() -> None:
+    orchestrator = Orchestrator(config=_config())
+    executor = RecordingExecutor()
+    plan = AttackPlan(
+        name="Cleanup Parameters",
+        target_group="purple.local",
+        steps=[
+            AttackPlanStep(
+                order=1,
+                technique_id="T1059.001",
+                parameters={"command": "whoami"},
+            ),
+        ],
+    )
+
+    await orchestrator._cleanup_all(
+        plan=plan,
+        plugin_registry=RecordingRegistry(executor),
+        target="10.10.1.108",
+    )
+
+    assert executor.cleanup_parameters == {"command": "whoami"}
+
+
+@pytest.mark.asyncio
+async def test_execute_report_preserves_technique_error_details() -> None:
+    class FailingOrchestrator(Orchestrator):
+        async def generate_plan(
+            self,
+            mode: str = "agent",
+            target_group_name: str = "",
+            playbook_path: Any = None,
+            playbook_name: str | None = None,
+            tactics: list[str] | None = None,
+            technique_ids: list[str] | None = None,
+        ) -> AttackPlan | None:
+            return AttackPlan(
+                name="Failure Detail Plan",
+                target_group="purple.local",
+                steps=[
+                    AttackPlanStep(
+                        order=1,
+                        technique_id="T1059.001",
+                        technique_name="PowerShell",
+                    ),
+                ],
+            )
+
+        def display_plan(self, plan: AttackPlan) -> bool:
+            return True
+
+        async def _execute_step(
+            self,
+            plan_step: AttackPlanStep,
+            plugin_registry: Any,
+            target: str,
+        ) -> TechniqueResult:
+            return TechniqueResult(
+                technique_id=plan_step.technique_id,
+                success=False,
+                output="partial stdout",
+                error="WinRM timeout",
+                artifacts=["artifact-one"],
+            )
+
+    config = _config()
+    config.siem.connector = "none"
+    config.output_dir = ""
+    orchestrator = FailingOrchestrator(config=config)
+
+    report = await orchestrator.execute(
+        target_group_name="purple.local",
+        skip_cleanup=True,
+    )
+
+    assert report is not None
+    assert report.results[0].execution_error == "WinRM timeout"
+    assert report.results[0].execution_output == "partial stdout"
+    assert report.results[0].artifacts == ["artifact-one"]
 
 
 @pytest.mark.asyncio
@@ -258,7 +402,10 @@ async def test_execute_disables_siem_validation_when_setup_fails(monkeypatch) ->
     config.output_dir = ""
     orchestrator = RecordingOrchestrator(config=config)
 
-    report = await orchestrator.execute(target_group_name="purple.local", skip_cleanup=True)
+    report = await orchestrator.execute(
+        target_group_name="purple.local",
+        skip_cleanup=True,
+    )
 
     assert report is not None
     assert siem.teardown_called is True
@@ -372,7 +519,10 @@ async def test_execute_validation_window_includes_detection_delay(monkeypatch) -
     config.output_dir = ""
     orchestrator = RecordingOrchestrator(config=config)
 
-    report = await orchestrator.execute(target_group_name="purple.local", skip_cleanup=True)
+    report = await orchestrator.execute(
+        target_group_name="purple.local",
+        skip_cleanup=True,
+    )
 
     assert report is not None
     assert orchestrator.step_end_seen is not None

@@ -22,7 +22,7 @@ from purplestrike.models.simulation import (
     SimulationStatus,
     SimulationStep,
 )
-from purplestrike.models.techniques import TechniqueResult
+from purplestrike.models.techniques import Technique, TechniqueResult
 from purplestrike.techniques.registry import technique_registry
 
 logger = logging.getLogger(__name__)
@@ -59,12 +59,15 @@ class Orchestrator:
     ) -> AttackPlan | None:
         if mode == "playbook":
             plan = await self._generate_playbook_plan(playbook_path, playbook_name)
+        elif mode == "default":
+            plan = self._generate_default_plan(target_group_name, tactics, technique_ids)
         else:
             plan = await self._generate_agent_plan(target_group_name, tactics, technique_ids)
 
         if plan is None:
             return None
-        return self._normalize_plan_targets(plan, target_group_name)
+        plan = self._normalize_plan_targets(plan, target_group_name)
+        return self._filter_plan_for_target_os(plan)
 
     async def _generate_playbook_plan(
         self,
@@ -159,6 +162,9 @@ class Orchestrator:
             techniques = [t for t in techniques if t.tactic in tactics]
         if technique_ids:
             techniques = [t for t in techniques if t.technique_id in technique_ids]
+        target_os = self._target_os_for_group(target_group_name)
+        if target_os:
+            techniques = [t for t in techniques if target_os in t.target_os]
 
         steps = []
         for i, t in enumerate(techniques[: self.config.max_steps], 1):
@@ -166,7 +172,7 @@ class Orchestrator:
                 order=i,
                 technique_id=t.technique_id,
                 technique_name=t.name,
-                parameters={},
+                parameters=self._default_parameters_for_technique(t, target_group_name),
                 expected_detection_rules=[dm.rule_id for dm in t.detection_mappings],
                 risk_level=t.risk_level,
             ))
@@ -176,6 +182,62 @@ class Orchestrator:
             steps=steps,
             target_group=target_group_name,
         )
+
+    def _target_os_for_group(self, target_group_name: str) -> str | None:
+        target_group = self.config.target_groups.get(target_group_name)
+        if target_group is None or not target_group.hosts:
+            return None
+        return str(target_group.hosts[0].os)
+
+    def _filter_plan_for_target_os(self, plan: AttackPlan) -> AttackPlan:
+        target_os = self._target_os_for_group(plan.target_group)
+        if not target_os:
+            return plan
+
+        filtered_steps = []
+        for step in plan.steps:
+            technique = self._technique_registry.get_technique(step.technique_id)
+            if technique is None or target_os in technique.target_os:
+                filtered_steps.append(step)
+
+        if len(filtered_steps) == len(plan.steps):
+            return plan
+
+        return AttackPlan(
+            name=plan.name,
+            description=plan.description,
+            steps=[
+                step.model_copy(update={"order": i})
+                for i, step in enumerate(filtered_steps, 1)
+            ],
+            target_group=plan.target_group,
+            created_at=plan.created_at,
+        )
+
+    def _default_parameters_for_technique(
+        self,
+        technique: Technique,
+        target_group_name: str,
+    ) -> dict[str, Any]:
+        parameters = {
+            p.name: p.default
+            for p in technique.parameters
+            if p.default is not None
+        }
+        target_group = self.config.target_groups.get(target_group_name)
+
+        if target_group and target_group.domain and "domain" not in parameters:
+            if any(p.name == "domain" for p in technique.parameters):
+                parameters["domain"] = target_group.domain
+
+        if self.config.target_username:
+            for account_param in ("target_account", "account_list"):
+                if account_param not in parameters and any(
+                    p.name == account_param for p in technique.parameters
+                ):
+                    parameters[account_param] = self.config.target_username
+
+        return parameters
 
     def _normalize_plan_targets(
         self,
@@ -342,7 +404,7 @@ class Orchestrator:
                 "not_detected": "[red]NOT DETECTED[/red]",
                 "unknown": "[dim]UNKNOWN[/dim]",
             }
-            status_icon = "✓" if technique_result.success else "✗"
+            status_icon = "OK" if technique_result.success else "FAIL"
             status_text = "successfully" if technique_result.success else "failed"
             console.print(
                 f"    [{status_icon}] Executed {status_text} "
@@ -358,6 +420,9 @@ class Orchestrator:
                 target=execution_target,
                 execution_status=exec_status,
                 execution_time_seconds=technique_result.execution_time_seconds,
+                execution_output=technique_result.output,
+                execution_error=technique_result.error,
+                artifacts=technique_result.artifacts,
                 detection_result=detection_result,
             )
             sim_steps.append(sim_step)
@@ -483,7 +548,7 @@ class Orchestrator:
                 executor = plugin_registry.get_attack_executor(executor_name)
                 if executor and step.technique_id in executor.supported_techniques:
                     try:
-                        await executor.cleanup(step.technique_id, target)
+                        await executor.cleanup(step.technique_id, target, step.parameters)
                     except Exception as e:
                         logger.warning(
                             f"Cleanup failed for {step.technique_id} on {target}: {e}"

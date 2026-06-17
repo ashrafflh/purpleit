@@ -10,6 +10,7 @@ from purplestrike.models.config import (
     TargetGroup,
     TargetHost,
 )
+from purplestrike.techniques.registry import technique_registry
 
 
 def _agent(hostname: str = "10.10.1.108", ip: str = "10.10.1.108") -> AgentLoop:
@@ -76,3 +77,15 @@ def test_parse_response_does_not_require_target_field() -> None:
     assert plan is not None
     assert plan.steps[0].technique_id == "T1059.001"
     assert "target" not in plan.steps[0].model_dump()
+
+
+def test_available_techniques_match_primary_target_os() -> None:
+    agent = _agent()
+    agent.technique_registry = technique_registry
+
+    techniques = agent._get_available_techniques(
+        tactics=None,
+        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+    )
+
+    assert [technique.technique_id for technique in techniques] == ["T1059.001"]

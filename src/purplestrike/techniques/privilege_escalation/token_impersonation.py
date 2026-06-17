@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,15 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         )
         whoami_all = await conn.run_ps("whoami /all")
         whoami_priv = await conn.run_ps("whoami /priv")
+        failed = next((result for result in (processes, whoami_all, whoami_priv) if not result.success), None)
+        if failed is not None:
+            return TechniqueResult(
+                technique_id="T1134.001",
+                success=False,
+                output=failed.stdout[:4096],
+                error=command_error(failed)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
         combined = (
             f"=== Running Processes ===\n{processes.stdout[:2048]}\n\n"
             f"=== Token Information ===\n{whoami_all.stdout[:1024]}\n\n"

