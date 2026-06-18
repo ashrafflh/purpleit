@@ -116,7 +116,7 @@ class TargetConnection:
             password = _get_credential("TARGET_PASSWORD", "")
             domain = _get_credential("TARGET_AD_DOMAIN", "")
 
-            if domain and "\\" not in username:
+            if domain and "\\" not in username and "@" not in username:
                 username = f"{domain}\\{username}"
 
             kwargs: dict[str, Any] = {
@@ -144,8 +144,8 @@ class TargetConnection:
             password = _get_credential("TARGET_PASSWORD", "")
             domain = _get_credential("TARGET_AD_DOMAIN", "")
 
-            if domain and "\\" not in username:
-                username = f"{domain}\\{username}"
+            if domain and "@" not in username:
+                username = f"{username}@{domain}"
 
             transport = _get_winrm_transport(password)
 
@@ -158,7 +158,7 @@ class TargetConnection:
             logger.info(f"WinRM connected to {self.target}")
         except ImportError:
             raise ConnectionError(
-                "pywinrm not installed. Install with: uv sync --extra winrm"
+                "pywinrm not installed. Install with: uv sync"
             )
         except Exception as e:
             raise ConnectionError(f"WinRM connection to {self.target} failed: {e}")

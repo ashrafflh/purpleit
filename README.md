@@ -13,7 +13,7 @@ PurpleStrike is an open-source, AI-driven Breach and Attack Simulation (BAS) pla
 
 ## Key Features
 
-- **Autonomous AI Agent** — Plans and chains multi-stage attack paths using LLM reasoning (OpenAI, Anthropic, Ollama, vLLM)
+- **Autonomous AI Agent** — Plans and chains multi-stage attack paths using LLM reasoning (OpenAI, DeepSeek, Anthropic, Ollama, vLLM)
 - **Pre-built Playbooks** — Run defined attack scenarios without AI planning
 - **Hybrid Detection Validation** — Deterministic rule mapping + LLM-powered alert correlation for accurate detection checks
 - **Financial Risk Quantification** — FAIR-inspired model translates detection gaps into dollar-value Annualized Loss Expectancy (ALE)
@@ -58,6 +58,7 @@ uv sync --extra dev
 
 # Install optional LLM providers
 uv sync --extra openai        # OpenAI GPT-4o
+uv sync --extra deepseek      # DeepSeek API
 uv sync --extra anthropic     # Anthropic Claude
 uv sync --extra ollama        # Ollama (local)
 uv sync --extra all           # All optional dependencies
@@ -101,10 +102,12 @@ PURPLESTRIKE_WAZUH_API_TIMEOUT=30
 PURPLESTRIKE_WAZUH_DASHBOARD_URL=https://wazuh-dashboard
 PURPLESTRIKE_WAZUH_DASHBOARD_API_ID=default
 
-# LLM Provider (openai | anthropic | ollama | vllm)
+# LLM Provider (openai | deepseek | anthropic | ollama | vllm | nvidia)
 PURPLESTRIKE_LLM_PROVIDER=openai
 PURPLESTRIKE_OPENAI_API_KEY=<key>
 PURPLESTRIKE_OPENAI_MODEL=gpt-4o
+PURPLESTRIKE_DEEPSEEK_API_KEY=<key>
+PURPLESTRIKE_DEEPSEEK_MODEL=deepseek-chat
 ```
 
 Validate your configuration:
@@ -113,6 +116,166 @@ Validate your configuration:
 purplestrike config validate
 purplestrike config show
 ```
+
+---
+
+## WinRM Setup (Kerberos-less, IP-based, NTLM)
+
+This guide documents a working WinRM configuration for Windows 10/11 targets using:
+
+- WinRM over HTTP (5985)
+- NTLM authentication (Negotiate)
+- IP-based targeting (no DNS required)
+- TrustedHosts (required for NTLM over IP)
+- No Kerberos, no CredSSP, no domain required
+
+---
+
+### Target Machine Setup (Windows 10/11)
+
+Run all commands in **elevated PowerShell** on the target.
+
+#### 1. Enable WinRM
+
+```powershell
+Enable-PSRemoting -Force
+```
+
+Or:
+
+```powershell
+winrm quickconfig -q
+```
+
+#### 2. Verify WinRM listener
+
+```powershell
+winrm enumerate winrm/config/listener
+```
+
+Expected output:
+
+```
+Transport = HTTP
+Port = 5985
+Address = *
+```
+
+If missing, re-run `winrm quickconfig`.
+
+#### 3. Enable NTLM authentication
+
+```powershell
+winrm set winrm/config/service/auth '@{Kerberos="false"; Basic="false"; Negotiate="true"; CredSSP="false"}'
+```
+
+#### 4. Allow local account remote access (IMPORTANT for workgroup setups)
+
+```powershell
+reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f
+```
+
+#### 5. Ensure user is in Administrators group
+
+```powershell
+net localgroup administrators <username> /add
+```
+
+#### 6. Restart WinRM
+
+```powershell
+Restart-Service WinRM
+```
+
+---
+
+### Client Machine Setup
+
+Run in **elevated PowerShell** on the PurpleStrike client machine.
+
+#### 1. Configure TrustedHosts (required for IP-based connections)
+
+```powershell
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "10.10.1.107" -Force
+```
+
+Verify:
+
+```powershell
+Get-Item WSMan:\localhost\Client\TrustedHosts
+```
+
+(Optional) Allow all hosts (lab only):
+
+```powershell
+Set-Item WSMan:\localhost\Client\TrustedHosts -Value "*" -Force
+```
+
+---
+
+### Connectivity Tests
+
+#### 1. Test WinRM service
+
+```powershell
+Test-WSMan 10.10.1.107
+```
+
+Expected: WSMan identity response.
+
+#### 2. Test TCP connectivity
+
+```powershell
+Test-NetConnection 10.10.1.107 -Port 5985
+```
+
+Expected: `TcpTestSucceeded : True`
+
+---
+
+### Remote PowerShell Usage
+
+Start interactive session:
+
+```powershell
+Enter-PSSession -ComputerName 10.10.1.107 -Authentication Negotiate -Credential Administrator
+```
+
+Run remote command:
+
+```powershell
+Invoke-Command -ComputerName 10.10.1.107 -Authentication Negotiate -Credential Administrator -ScriptBlock {
+    whoami
+}
+```
+
+---
+
+### Python (pywinrm) Usage
+
+```python
+import winrm
+
+session = winrm.Session(
+    "10.10.1.107",
+    auth=("Administrator", "password"),
+    transport="ntlm",
+)
+
+result = session.run_ps("whoami")
+print(result.status_code)
+print(result.std_out.decode())
+```
+
+---
+
+### Common Issues & Fixes
+
+| Issue | Fix |
+|---|---|
+| **"Access is denied"** | Run on target: `reg add HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System /v LocalAccountTokenFilterPolicy /t REG_DWORD /d 1 /f`. Ensure user is in Administrators group. |
+| **WinRM connection fails** | Check `winrm quickconfig` on target and `Test-NetConnection <ip> -Port 5985` from client. |
+| **TrustedHosts error** | Run on client: `Set-Item WSMan:\localhost\Client\TrustedHosts -Value "<target-ip>" -Force` |
 
 ---
 
@@ -315,7 +478,7 @@ PurpleStrike uses a **plugin-based modular architecture** with four plugin types
 |---|---|---|
 | **Attack Executor** | Execute techniques on target systems | Custom Python (SSH/WinRM) |
 | **SIEM Connector** | Query alerts and rules from SIEM | Wazuh |
-| **LLM Provider** | Power agent reasoning and alert correlation | OpenAI, Anthropic, Ollama, vLLM |
+| **LLM Provider** | Power agent reasoning and alert correlation | OpenAI, DeepSeek, Anthropic, Ollama, vLLM |
 | **Report Formatter** | Generate output reports | JSON, CSV |
 
 All plugin types follow Python `Protocol` interfaces (runtime-checkable) and are loaded by the `PluginLoader` from built-in packages or user plugin directories (`~/.purplestrike/plugins/`).
