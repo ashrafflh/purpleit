@@ -17,19 +17,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     try:
         conn = await get_connection(target)
         create_cmd = (
-            "if (-not (Test-Path $env:TEMP\\purplestrike)) "
-            "{ New-Item -ItemType Directory -Path $env:TEMP\\purplestrike }; "
-            "$urlContent = @\"\n"
-            "[InternetShortcut]\n"
-            "URL=https://purplestrike-simulation.example.invalid/\n"
-            "IconIndex=0\n"
-            "IconFile=C:\\Windows\\System32\\SHELL32.dll\n"
-            "\"@; "
-            f"Set-Content -Path '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' "
-            f"-Value $urlContent -Encoding ASCII; "
-            f"Write-Output 'Artifact created:'; "
-            f"Get-Item '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' | "
-            f"Select-Object FullName,Length,LastWriteTime | Format-List"
+            "$artifactDir = Join-Path $env:TEMP 'purplestrike'; "
+            "if (-not (Test-Path -LiteralPath $artifactDir)) { "
+            "New-Item -ItemType Directory -Path $artifactDir -Force | Out-Null }; "
+            f"$artifactPath = Join-Path $artifactDir '{ARTIFACT_NAME}'; "
+            "$urlContent = '[InternetShortcut]' + [Environment]::NewLine + "
+            "'URL=https://purplestrike-simulation.example.invalid/' + [Environment]::NewLine + "
+            "'IconIndex=0' + [Environment]::NewLine + "
+            "'IconFile=C:\\Windows\\System32\\SHELL32.dll' + [Environment]::NewLine; "
+            "Set-Content -LiteralPath $artifactPath -Value $urlContent -Encoding ASCII; "
+            "Write-Output 'Artifact created:'; "
+            "Get-Item -LiteralPath $artifactPath | "
+            "Select-Object FullName,Length,LastWriteTime | Format-List"
         )
         result = await conn.run_ps(create_cmd)
         return TechniqueResult(
@@ -58,12 +57,13 @@ async def cleanup(target: str) -> None:
     try:
         conn = await get_connection(target)
         await conn.run_ps(
-            f"Remove-Item -Path '$env:TEMP\\purplestrike\\{ARTIFACT_NAME}' "
-            f"-Force -ErrorAction SilentlyContinue; "
-            f"if ((Get-ChildItem '$env:TEMP\\purplestrike' -ErrorAction SilentlyContinue "
-            f"| Measure-Object).Count -eq 0) {{ "
-            f"Remove-Item -Path '$env:TEMP\\purplestrike' -Force -Recurse "
-            f"-ErrorAction SilentlyContinue }}"
+            "$artifactDir = Join-Path $env:TEMP 'purplestrike'; "
+            f"$artifactPath = Join-Path $artifactDir '{ARTIFACT_NAME}'; "
+            "Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue; "
+            "if ((Test-Path -LiteralPath $artifactDir) -and "
+            "((Get-ChildItem -LiteralPath $artifactDir -ErrorAction SilentlyContinue | "
+            "Measure-Object).Count -eq 0)) { "
+            "Remove-Item -LiteralPath $artifactDir -Force -Recurse -ErrorAction SilentlyContinue }"
         )
     except Exception as e:
         logger.warning(f"T1566.002 cleanup failed: {e}")

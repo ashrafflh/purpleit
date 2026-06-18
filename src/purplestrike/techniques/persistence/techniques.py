@@ -19,8 +19,8 @@ PERSISTENCE_TECHNIQUES = [
             DetectionMapping(rule_id="100200", confidence="high", description="Detects scheduled task creation for persistence"),
         ],
         parameters=[
-            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True),
-            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True),
+            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True, default="PurpleStrikeTask"),
+            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True, default="cmd.exe"),
         ],
     ),
     Technique(
@@ -36,8 +36,8 @@ PERSISTENCE_TECHNIQUES = [
             DetectionMapping(rule_id="100201", confidence="high", description="Detects registry run key modification"),
         ],
         parameters=[
-            TechniqueParameter(name="key_path", description="Registry key path", type="string", required=True),
-            TechniqueParameter(name="value", description="Registry value to set", type="string", required=True),
+            TechniqueParameter(name="key_path", description="Registry key path", type="string", required=True, default="HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
+            TechniqueParameter(name="value", description="Registry value to set", type="string", required=True, default="cmd.exe /c echo PurpleStrike"),
         ],
     ),
     Technique(
@@ -79,8 +79,8 @@ PERSISTENCE_TECHNIQUES = [
             DetectionMapping(rule_id="100204", confidence="high", description="Detects WMI event subscription creation"),
         ],
         parameters=[
-            TechniqueParameter(name="event_query", description="WMI event query", type="string", required=True),
-            TechniqueParameter(name="command", description="Command to execute on trigger", type="string", required=True),
+            TechniqueParameter(name="event_query", description="WMI event query", type="string", required=True, default="SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'notepad.exe'"),
+            TechniqueParameter(name="command", description="Command to execute on trigger", type="string", required=True, default="cmd.exe /c echo PurpleStrike"),
         ],
     ),
     Technique(
@@ -109,7 +109,7 @@ PERSISTENCE_TECHNIQUES = [
             DetectionMapping(rule_id="100206", confidence="high", description="Detects local account creation"),
         ],
         parameters=[
-            TechniqueParameter(name="username", description="Account username to create", type="string", required=True),
+            TechniqueParameter(name="username", description="Account username to create", type="string", required=True, default="purplestrike_local"),
         ],
     ),
     Technique(
@@ -125,7 +125,7 @@ PERSISTENCE_TECHNIQUES = [
             DetectionMapping(rule_id="100207", confidence="high", description="Detects domain account creation"),
         ],
         parameters=[
-            TechniqueParameter(name="username", description="Domain account username to create", type="string", required=True),
+            TechniqueParameter(name="username", description="Domain account username to create", type="string", required=True, default="purplestrike_domain"),
             TechniqueParameter(name="domain", description="Target domain", type="string", required=True),
         ],
     ),

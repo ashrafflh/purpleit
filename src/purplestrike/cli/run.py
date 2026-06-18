@@ -10,10 +10,11 @@ console = Console()
 
 def run(
     target_group: str = typer.Option(..., "--target-group", help="Target group name from config"),
-    mode: str = typer.Option("agent", "--mode", help="Execution mode: agent | playbook"),
+    mode: str = typer.Option("agent", "--mode", help="Execution mode: agent | playbook | default"),
     playbook: str | None = typer.Option(None, "--playbook", help="Playbook name or path"),
     tactics: str | None = typer.Option(None, "--tactics", help="Comma-separated MITRE tactic IDs"),
     techniques: str | None = typer.Option(None, "--techniques", help="Comma-separated technique IDs"),
+    all_techniques: bool = typer.Option(False, "--all-techniques", help="Execute every technique applicable to the target OS"),
     max_steps: int = typer.Option(20, "--max-steps", help="Maximum attack steps"),
     detection_check_delay: int = typer.Option(30, "--detection-check-delay", help="Seconds to wait before querying SIEM"),
     output_dir: str = typer.Option("./results", "--output-dir", help="Directory for output reports"),
@@ -29,6 +30,7 @@ def run(
         playbook=playbook,
         tactics=tactics,
         techniques=techniques,
+        all_techniques=all_techniques,
         max_steps=max_steps,
         detection_check_delay=detection_check_delay,
         output_dir=output_dir,
@@ -45,6 +47,7 @@ async def _run(
     playbook: str | None,
     tactics: str | None,
     techniques: str | None,
+    all_techniques: bool,
     max_steps: int,
     detection_check_delay: int,
     output_dir: str,
@@ -69,12 +72,26 @@ async def _run(
     if llm_provider:
         from purplestrike.models.config import LLMProviderType
         config.llm.provider = LLMProviderType(llm_provider)
-    config.max_steps = max_steps
     config.detection_check_delay = detection_check_delay
     config.output_dir = output_dir
 
     tactic_list = tactics.split(",") if tactics else None
+    if all_techniques and techniques:
+        console.print("\n[red]Use either --all-techniques or --techniques, not both.[/red]")
+        raise typer.Exit(1)
+    if all_techniques and mode == "playbook":
+        console.print("\n[red]--all-techniques cannot be used with playbook mode.[/red]")
+        raise typer.Exit(1)
+
     technique_list = techniques.split(",") if techniques else None
+    if all_techniques:
+        from purplestrike.techniques.registry import technique_registry
+
+        technique_list = technique_registry.get_technique_ids()
+        mode = "default"
+        max_steps = max(max_steps, len(technique_list))
+
+    config.max_steps = max_steps
 
     console.print(f"  Target group: [bold]{target_group}[/bold]")
     console.print(f"  Mode: {mode}")

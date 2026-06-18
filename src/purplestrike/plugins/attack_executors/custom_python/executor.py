@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 import time
 from typing import Any
 
@@ -89,13 +90,22 @@ class CustomPythonExecutor:
                 execution_time_seconds=time.monotonic() - start,
             )
 
-    async def cleanup(self, technique_id: str, target: str) -> None:
+    async def cleanup(
+        self,
+        technique_id: str,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> None:
         technique = technique_registry.get_technique(technique_id)
         if technique and technique.module:
             try:
                 module = self._load_technique_module(technique.module)
                 if module and hasattr(module, "cleanup"):
-                    await module.cleanup(target=target)
+                    cleanup_params = inspect.signature(module.cleanup).parameters
+                    if "parameters" in cleanup_params:
+                        await module.cleanup(target=target, parameters=parameters)
+                    else:
+                        await module.cleanup(target=target)
             except Exception as e:
                 logger.warning(f"Cleanup failed for {technique_id} on {target}: {e}")
 

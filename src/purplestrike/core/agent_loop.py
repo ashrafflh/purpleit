@@ -31,7 +31,6 @@ You must respond with a valid JSON object matching this structure:
       "order": 1,
       "technique_id": "T1059.001",
       "technique_name": "PowerShell",
-      "target": "target_hostname",
       "parameters": {},
       "expected_detection_rules": [],
       "risk_level": "medium"
@@ -90,7 +89,7 @@ CONSTRAINTS:
 - Maximum {self.config.max_steps} steps
 - Only use techniques from the available list above
 - Chain techniques in a realistic attack progression
-- Each step must target a host from the target group
+- Do not include a per-step target; PurpleStrike uses the configured target group host
 
 Generate the plan now."""
 
@@ -109,15 +108,29 @@ Generate the plan now."""
             techniques = [t for t in techniques if t.tactic in tactics]
         if technique_ids:
             techniques = [t for t in techniques if t.technique_id in technique_ids]
+        target_os = self._primary_target_os()
+        if target_os:
+            techniques = [t for t in techniques if target_os in t.target_os]
         return [t for t in techniques if t.safe_to_execute]
+
+    def _primary_target_os(self) -> str | None:
+        if not self.target_group.hosts:
+            return None
+        return str(self.target_group.hosts[0].os)
 
     def _format_techniques(self, techniques: list[Technique]) -> str:
         lines = []
         for t in techniques:
             params_str = ""
             if t.parameters:
-                param_names = [p.name for p in t.parameters if p.required]
-                params_str = f" (required params: {', '.join(param_names)})" if param_names else ""
+                parts = []
+                for p in t.parameters:
+                    required = "required" if p.required else "optional"
+                    if p.default is None:
+                        parts.append(f"{p.name}={required}")
+                    else:
+                        parts.append(f"{p.name}={required}, default={p.default!r}")
+                params_str = f" (params: {'; '.join(parts)})"
             lines.append(f"- {t.technique_id}: {t.name} [{t.tactic}]{params_str}")
         return "\n".join(lines)
 
@@ -150,7 +163,6 @@ Generate the plan now."""
                     order=step_data.get("order", len(steps) + 1),
                     technique_id=step_data.get("technique_id", ""),
                     technique_name=step_data.get("technique_name", ""),
-                    target=step_data.get("target", ""),
                     parameters=step_data.get("parameters", {}),
                     expected_detection_rules=step_data.get("expected_detection_rules", []),
                     risk_level=step_data.get("risk_level", "medium"),

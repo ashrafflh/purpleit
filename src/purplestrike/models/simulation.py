@@ -84,6 +84,9 @@ class SimulationStep(BaseModel):
     target: str = ""
     execution_status: ExecutionStatus = ExecutionStatus.SUCCESS
     execution_time_seconds: float = 0.0
+    execution_output: str = ""
+    execution_error: str | None = None
+    artifacts: list[str] = Field(default_factory=list)
     detection_result: DetectionResult = Field(default_factory=DetectionResult)
 
     @property

@@ -51,13 +51,15 @@ async def _plan(
         raise typer.Exit(1)
 
     console.print(f"\n[bold]Plan: {plan_result.name}[/bold]")
+    target_host = _target_host(config, target_group)
+    if target_host:
+        console.print(f"Target host: {target_host}")
     console.print(f"Total steps: {len(plan_result.steps)}\n")
 
     table = Table()
     table.add_column("#", style="bold")
     table.add_column("Technique ID")
     table.add_column("Technique Name")
-    table.add_column("Target")
     table.add_column("Risk Level")
 
     for step in plan_result.steps:
@@ -65,7 +67,6 @@ async def _plan(
             str(step.order),
             step.technique_id,
             step.technique_name,
-            step.target,
             step.risk_level,
         )
 
@@ -93,3 +94,10 @@ def _load_config() -> PurpleStrikeConfig | None:
 
     console.print("[yellow]No config found. Run 'purplestrike config init' first.[/yellow]")
     return None
+
+
+def _target_host(config: PurpleStrikeConfig, target_group: str) -> str:
+    group = config.target_groups.get(target_group)
+    if group is None or not group.hosts:
+        return ""
+    return group.hosts[0].hostname

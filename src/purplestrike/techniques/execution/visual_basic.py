@@ -14,18 +14,33 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        vbs_path = "$env:TEMP\\purplestrike_test.vbs"
-        out_path = "$env:TEMP\\purplestrike_vbs_output.txt"
-        vbs_content = (
-            'Set objFSO = CreateObject("Scripting.FileSystemObject")\n'
-            'Set objFile = objFSO.CreateTextFile(objFSO.BuildPath('
-            'objFSO.GetSpecialFolder(2), "purplestrike_vbs_output.txt"))\n'
-            'objFile.WriteLine "VBScript executed successfully"\n'
-            'objFile.Close'
+        create_cmd = (
+            "$vbsPath = Join-Path $env:TEMP 'purplestrike_test.vbs'; "
+            "$vbsContent = 'Set objFSO = CreateObject(\"Scripting.FileSystemObject\")' + "
+            "[Environment]::NewLine + "
+            "'Set objFile = objFSO.CreateTextFile(objFSO.BuildPath(objFSO.GetSpecialFolder(2), "
+            "\"purplestrike_vbs_output.txt\"))' + [Environment]::NewLine + "
+            "'objFile.WriteLine \"VBScript executed successfully\"' + [Environment]::NewLine + "
+            "'objFile.Close'; "
+            "Set-Content -LiteralPath $vbsPath -Value $vbsContent -Encoding ASCII"
         )
-        await conn.run_ps(f'Set-Content -Path "{vbs_path}" -Value @\'{vbs_content}\'@')
-        result = await conn.run_ps(f"cscript //nologo {vbs_path}")
-        output_result = await conn.run_ps(f"Get-Content {out_path} -ErrorAction SilentlyContinue")
+        create_result = await conn.run_ps(create_cmd)
+        if not create_result.success:
+            return TechniqueResult(
+                technique_id="T1059.005",
+                success=False,
+                output=create_result.stdout[:4096],
+                error=create_result.stderr[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
+        result = await conn.run_ps(
+            "$vbsPath = Join-Path $env:TEMP 'purplestrike_test.vbs'; "
+            "cscript //nologo $vbsPath"
+        )
+        output_result = await conn.run_ps(
+            "$outPath = Join-Path $env:TEMP 'purplestrike_vbs_output.txt'; "
+            "Get-Content -LiteralPath $outPath -ErrorAction SilentlyContinue"
+        )
         combined_output = result.stdout + "\n" + output_result.stdout
         return TechniqueResult(
             technique_id="T1059.005",
@@ -53,10 +68,12 @@ async def cleanup(target: str) -> None:
     try:
         conn = await get_connection(target)
         await conn.run_ps(
-            "Remove-Item $env:TEMP\\purplestrike_test.vbs -ErrorAction SilentlyContinue"
+            "Remove-Item -LiteralPath (Join-Path $env:TEMP 'purplestrike_test.vbs') "
+            "-ErrorAction SilentlyContinue"
         )
         await conn.run_ps(
-            "Remove-Item $env:TEMP\\purplestrike_vbs_output.txt -ErrorAction SilentlyContinue"
+            "Remove-Item -LiteralPath (Join-Path $env:TEMP 'purplestrike_vbs_output.txt') "
+            "-ErrorAction SilentlyContinue"
         )
     except Exception as e:
         logger.warning(f"T1059.005 cleanup failed: {e}")

@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,14 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             gpo_list = await conn.run_ps(
                 "Get-ADObject -Filter {ObjectClass -eq 'groupPolicyContainer'} "
                 "-Properties DisplayName | Format-Table -AutoSize"
+            )
+        if not gpo_list.success:
+            return TechniqueResult(
+                technique_id="T1484.001",
+                success=False,
+                output=gpo_list.stdout[:4096],
+                error=command_error(gpo_list)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
             )
         combined = f"=== Group Policy Objects ===\n{gpo_list.stdout[:4096]}"
         return TechniqueResult(

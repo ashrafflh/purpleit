@@ -27,8 +27,8 @@ class CsvFormatter:
     def _write_results_csv(self, report: SimulationReport, path: Path) -> None:
         headers = [
             "step", "technique_id", "technique_name", "tactic", "target",
-            "execution_status", "execution_time_seconds", "detection_result",
-            "detection_confidence", "matched_rule_ids", "vulnerability_score",
+            "execution_status", "execution_time_seconds", "execution_error",
+            "artifacts", "detection_result", "detection_confidence", "matched_rule_ids", "vulnerability_score",
             "threat_event_frequency", "loss_magnitude", "annualized_loss_expectancy",
             "risk_level",
         ]
@@ -47,6 +47,8 @@ class CsvFormatter:
                     step.target,
                     step.execution_status.value,
                     f"{step.execution_time_seconds:.1f}",
+                    step.execution_error or "",
+                    ";".join(step.artifacts),
                     step.detection_result.status.value,
                     f"{step.detection_result.confidence:.2f}",
                     ";".join(step.detection_result.matched_rules),

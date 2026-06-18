@@ -19,7 +19,7 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100100", confidence="high", description="Detects suspicious PowerShell execution"),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="PowerShell command to execute", type="string", required=True),
+            TechniqueParameter(name="command", description="PowerShell command to execute", type="string", required=True, default="Write-Output 'PurpleStrike PowerShell simulation'"),
             TechniqueParameter(name="encoded", description="Use encoded command", type="boolean", default=False),
         ],
     ),
@@ -36,7 +36,7 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100101", confidence="high", description="Detects suspicious cmd.exe execution"),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="Command to execute", type="string", required=True),
+            TechniqueParameter(name="command", description="Command to execute", type="string", required=True, default="echo PurpleStrike cmd simulation"),
         ],
     ),
     Technique(
@@ -52,7 +52,7 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100102", confidence="high", description="Detects suspicious bash execution"),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="Bash command to execute", type="string", required=True),
+            TechniqueParameter(name="command", description="Bash command to execute", type="string", required=True, default="echo PurpleStrike bash simulation"),
         ],
     ),
     Technique(
@@ -81,7 +81,7 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100104", confidence="high", description="Detects WMI remote execution"),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="WMI command to execute", type="string", required=True),
+            TechniqueParameter(name="command", description="WMI command to execute", type="string", required=True, default="whoami"),
         ],
     ),
     Technique(
@@ -110,8 +110,8 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100106", confidence="high", description="Detects suspicious service creation or modification"),
         ],
         parameters=[
-            TechniqueParameter(name="service_name", description="Service name to create/modify", type="string", required=True),
-            TechniqueParameter(name="command", description="Command the service will execute", type="string", required=True),
+            TechniqueParameter(name="service_name", description="Service name to create/modify", type="string", required=True, default="PurpleStrikeSvc"),
+            TechniqueParameter(name="command", description="Command the service will execute", type="string", required=True, default="whoami"),
         ],
     ),
     Technique(
@@ -155,8 +155,8 @@ EXECUTION_TECHNIQUES = [
             DetectionMapping(rule_id="100109", confidence="high", description="Detects scheduled task creation"),
         ],
         parameters=[
-            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True),
-            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True),
+            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True, default="PurpleStrikeTask"),
+            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True, default="whoami"),
         ],
     ),
 ]

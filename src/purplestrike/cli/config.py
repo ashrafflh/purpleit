@@ -43,10 +43,10 @@ def init() -> None:
     config.siem.dashboard_url = dashboard_url
     config.siem.api_timeout = siem_timeout
 
-    config.target_ad_domain = typer.prompt("Target AD domain", default="corp.local")
-    config.target_username = typer.prompt("Target username", default="attack_user")
+    config.target_ad_domain = typer.prompt("Remote login AD domain", default="corp.local")
+    config.target_username = typer.prompt("Remote login username", default="attack_user")
     config.target_password = typer.prompt(
-        "Target password (blank to use PURPLESTRIKE_TARGET_PASSWORD)",
+        "Remote login password (blank to use PURPLESTRIKE_TARGET_PASSWORD)",
         default="",
         hide_input=True,
         show_default=False,
@@ -93,12 +93,20 @@ def show() -> None:
     table.add_row("Output Dir", config.output_dir)
     table.add_row("DB Path", config.db_path or "(default)")
 
-    table.add_row("Target AD Domain", config.target_ad_domain or "(not set)")
-    table.add_row("Target Username", config.target_username or "(not set)")
-    table.add_row("Target Password", "***" if config.target_password else "(not set)")
+    table.add_row("Remote Login Domain", config.target_ad_domain or "(not set)")
+    table.add_row("Remote Login Username", config.target_username or "(not set)")
+    table.add_row("Remote Login Password", "***" if config.target_password else "(not set)")
 
     if config.target_groups:
         table.add_row("Target Groups", ", ".join(config.target_groups.keys()))
+        target_hosts = []
+        for group in config.target_groups.values():
+            for host in group.hosts:
+                target_hosts.append(
+                    host.hostname if host.hostname == host.ip else f"{host.hostname} ({host.ip})"
+                )
+        if target_hosts:
+            table.add_row("Target Hosts", ", ".join(target_hosts))
 
     console.print(table)
 
@@ -140,7 +148,7 @@ def validate_config() -> None:
     if not config.siem.api_user:
         issues.append("Wazuh Dashboard user not configured (set PURPLESTRIKE_WAZUH_API_USER)")
     if not config.target_password:
-        issues.append("Target password not configured (set PURPLESTRIKE_TARGET_PASSWORD)")
+        issues.append("Remote login password not configured (set PURPLESTRIKE_TARGET_PASSWORD)")
 
     if issues:
         console.print("[red]Configuration issues:[/red]")

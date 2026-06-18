@@ -14,17 +14,19 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        file_path = "$env:TEMP\\purplestrike_test.scr"
-        file_content = "REM PurpleStrike simulation file - benign content - not executable"
-        result = await conn.run_ps(
-            f'Set-Content -Path "{file_path}" -Value "{file_content}"'
+        file_name = "purplestrike_test.scr"
+        command = (
+            f"$filePath = Join-Path $env:TEMP '{file_name}'; "
+            "$fileContent = 'REM PurpleStrike simulation file - benign content - not executable'; "
+            "Set-Content -LiteralPath $filePath -Value $fileContent -Encoding ASCII; "
+            "Test-Path -LiteralPath $filePath"
         )
-        verify = await conn.run_ps(f"Test-Path {file_path}")
-        success = verify.success and verify.stdout.strip() == "True"
+        result = await conn.run_ps(command)
+        success = result.success and result.stdout.strip() == "True"
         return TechniqueResult(
             technique_id="T1204.002",
             success=success,
-            output=f"Simulated malicious file created at {file_path}",
+            output=f"Simulated malicious file created at $env:TEMP\\{file_name}",
             error=result.stderr[:1024] if not success else None,
             execution_status=ExecutionStatus.SUCCESS if success else ExecutionStatus.FAILURE,
         )
@@ -47,7 +49,8 @@ async def cleanup(target: str) -> None:
     try:
         conn = await get_connection(target)
         await conn.run_ps(
-            "Remove-Item $env:TEMP\\purplestrike_test.scr -ErrorAction SilentlyContinue"
+            "Remove-Item -LiteralPath (Join-Path $env:TEMP 'purplestrike_test.scr') "
+            "-ErrorAction SilentlyContinue"
         )
     except Exception as e:
         logger.warning(f"T1204.002 cleanup failed: {e}")

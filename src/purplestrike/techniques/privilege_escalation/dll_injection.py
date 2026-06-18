@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,15 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             f"Get-Process -Name '{target_process}' -ErrorAction SilentlyContinue "
             "| Select-Object Id, Name, Path | Format-List"
         )
+        failed = next((result for result in (processes, target_match) if not result.success), None)
+        if failed is not None:
+            return TechniqueResult(
+                technique_id="T1055.001",
+                success=False,
+                output=failed.stdout[:4096],
+                error=command_error(failed)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
         combined = (
             f"=== All Processes ===\n{processes.stdout[:3072]}\n\n"
             f"=== Target Process Match ===\n{target_match.stdout[:1024]}"

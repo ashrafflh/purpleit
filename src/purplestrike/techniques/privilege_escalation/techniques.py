@@ -61,8 +61,8 @@ PRIV_ESC_TECHNIQUES = [
             DetectionMapping(rule_id="100303", confidence="high", description="Detects suspicious service creation/modification"),
         ],
         parameters=[
-            TechniqueParameter(name="service_name", description="Service name", type="string", required=True),
-            TechniqueParameter(name="binary_path", description="Service binary path", type="string", required=True),
+            TechniqueParameter(name="service_name", description="Service name", type="string", required=True, default="PurpleStrikePrivEscSvc"),
+            TechniqueParameter(name="binary_path", description="Service binary path", type="string", required=True, default="C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike"),
         ],
     ),
     Technique(
@@ -117,8 +117,8 @@ PRIV_ESC_TECHNIQUES = [
             DetectionMapping(rule_id="100307", confidence="high", description="Detects DLL injection activity"),
         ],
         parameters=[
-            TechniqueParameter(name="target_process", description="Target process name or PID", type="string", required=True),
-            TechniqueParameter(name="dll_path", description="DLL to inject", type="string", required=True),
+            TechniqueParameter(name="target_process", description="Target process name or PID", type="string", required=True, default="explorer"),
+            TechniqueParameter(name="dll_path", description="DLL to inject", type="string", required=True, default="C:\\Windows\\System32\\kernel32.dll"),
         ],
     ),
 ]

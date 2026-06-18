@@ -19,8 +19,8 @@ INITIAL_ACCESS_TECHNIQUES = [
             DetectionMapping(rule_id="100001", confidence="medium", description="Detects exploitation attempts against public-facing services"),
         ],
         parameters=[
-            TechniqueParameter(name="target_port", description="Target port to exploit", type="integer", required=True),
-            TechniqueParameter(name="exploit_module", description="Exploit module to use", type="string", required=True),
+            TechniqueParameter(name="target_port", description="Target port to exploit", type="integer", required=True, default=80),
+            TechniqueParameter(name="exploit_module", description="Exploit module to use", type="string", required=True, default="generic_probe"),
         ],
     ),
     Technique(
@@ -36,7 +36,7 @@ INITIAL_ACCESS_TECHNIQUES = [
             DetectionMapping(rule_id="100002", confidence="medium", description="Detects suspicious remote service logins"),
         ],
         parameters=[
-            TechniqueParameter(name="service_type", description="Remote service type (vpn, rdp, citrix)", type="string", required=True),
+            TechniqueParameter(name="service_type", description="Remote service type (vpn, rdp, citrix)", type="string", required=True, default="rdp"),
         ],
     ),
     Technique(

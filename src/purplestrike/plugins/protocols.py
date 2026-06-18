@@ -22,7 +22,12 @@ class AttackExecutor(Protocol):
         self, technique_id: str, target: str, parameters: dict[str, Any]
     ) -> TechniqueResult: ...
 
-    async def cleanup(self, technique_id: str, target: str) -> None: ...
+    async def cleanup(
+        self,
+        technique_id: str,
+        target: str,
+        parameters: dict[str, Any] | None = None,
+    ) -> None: ...
 
     async def teardown(self) -> None: ...
 

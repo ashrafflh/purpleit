@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,21 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             )
             output += f"Comsvcs simulation: {sim_result.stdout.strip()}"
         else:
-            output += f"Unknown method: {method}"
+            return TechniqueResult(
+                technique_id="T1003.001",
+                success=False,
+                output=output[:4096],
+                error=f"Unknown method: {method}",
+                execution_status=ExecutionStatus.FAILURE,
+            )
+        if not sim_result.success:
+            return TechniqueResult(
+                technique_id="T1003.001",
+                success=False,
+                output=output[:4096],
+                error=command_error(sim_result)[:1024],
+                execution_status=ExecutionStatus.FAILURE,
+            )
         return TechniqueResult(
             technique_id="T1003.001",
             success=True,
