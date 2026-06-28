@@ -176,13 +176,13 @@ SIEM Alerts in Time Window:
 {alerts_summary if alerts_summary else "No alerts found in time window."}
 
 Respond with a JSON object:
-{{"detection_status": "detected"|"partially_detected"|"not_detected", "confidence": 0.0-1.0, "matched_alerts": [], "reasoning": "brief explanation"}}"""
+{{"detection_status": "detected"|"not_detected", "confidence": 0.0-1.0, "matched_alerts": [], "reasoning": "brief explanation"}}"""
 
         try:
             import json
 
             messages = [
-                {"role": "system", "content": "You are a detection validation analyst. Be conservative — only flag as detected if alerts clearly relate to the attack indicators."},
+                {"role": "system", "content": "You are a detection validation analyst. Be conservative — only flag as detected if alerts clearly relate to the attack indicators. Routine events like logon, logoff, or general process activity do not count as detection. If alerts contain only routine or unrelated events, return not_detected."},
                 {"role": "user", "content": prompt},
             ]
             response = await llm_provider.complete(messages)
@@ -196,7 +196,6 @@ Respond with a JSON object:
             status_str = result.get("detection_status", "not_detected")
             status_map = {
                 "detected": DetectionStatus.DETECTED,
-                "partially_detected": DetectionStatus.PARTIALLY_DETECTED,
                 "not_detected": DetectionStatus.NOT_DETECTED,
             }
 
