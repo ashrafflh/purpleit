@@ -60,15 +60,17 @@ async def cleanup(target: str) -> None:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        await conn.run_ps(
+        result = await conn.run_ps(
             "$artifactDir = Join-Path $env:TEMP 'purplestrike'; "
             f"$artifactPath = Join-Path $artifactDir '{ARTIFACT_NAME}'; "
-            "Remove-Item -LiteralPath $artifactPath -Force -ErrorAction SilentlyContinue; "
+            "[IO.File]::Delete($artifactPath); "
             "if ((Test-Path -LiteralPath $artifactDir) -and "
             "((Get-ChildItem -LiteralPath $artifactDir -ErrorAction SilentlyContinue | "
             "Measure-Object).Count -eq 0)) { "
-            "Remove-Item -LiteralPath $artifactDir -Force -Recurse -ErrorAction SilentlyContinue }"
+            "[IO.Directory]::Delete($artifactDir) }"
         )
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
     except Exception as e:
         logger.warning(f"T1566.001 cleanup failed: {e}")
     finally:

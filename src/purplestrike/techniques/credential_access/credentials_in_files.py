@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import ps_quote
 
 logger = logging.getLogger(__name__)
 
@@ -19,8 +21,8 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         if is_windows:
             paths = search_paths.split(";")
             patterns = file_patterns.split(";")
-            path_filter = ",".join(f"'{p}'" for p in paths)
-            pattern_filter = ",".join(f"'{p}'" for p in patterns)
+            path_filter = ",".join(ps_quote(p.strip()) for p in paths)
+            pattern_filter = ",".join(ps_quote(p.strip()) for p in patterns)
             ps_cmd = (
                 f"$paths = @({path_filter}); "
                 f"$patterns = @({pattern_filter}); "
@@ -41,11 +43,13 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             )
             result = await conn.run_ps(ps_cmd)
         else:
-            paths = search_paths.replace(";", " ").replace("C:\\Users", "/home").replace("C:\\Temp", "/tmp")
-            patterns = file_patterns.replace(";", " -o -name ").replace("*.", "*.*")
+            paths = " ".join(shlex.quote(p.strip()) for p in
+                             search_paths.replace("C:\\Users", "/home").replace(
+                                 "C:\\Temp", "/tmp").split(";") if p.strip())
+            patterns = " -o ".join(f"-name {shlex.quote(p.strip())}"
+                                  for p in file_patterns.split(";") if p.strip())
             cmd = (
-                f"find {paths} -maxdepth 3 \\"
-                f" \\( -name {patterns} \\) "
+                f"find {paths} -maxdepth 3 -type f \\( {patterns} \\) "
                 r"-exec grep -l -E 'password=|pwd=|Password|connectionString|credential' {} \; 2>/dev/null | wc -l"
             )
             result = await conn.run_command(cmd)

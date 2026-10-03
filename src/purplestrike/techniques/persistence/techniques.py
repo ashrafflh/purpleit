@@ -8,6 +8,7 @@ from purplestrike.models.techniques import (
 PERSISTENCE_TECHNIQUES = [
     Technique(
         technique_id="T1053.005p",
+        mitre_technique_id="T1053.005",
         name="Scheduled Task/Job: Scheduled Task (Persistence)",
         tactic=TacticID.PERSISTENCE,
         description="Creates a scheduled task for persistence",

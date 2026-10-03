@@ -17,6 +17,11 @@ EXECUTION_TECHNIQUES = [
         risk_level="medium",
         detection_mappings=[
             DetectionMapping(rule_id="100100", confidence="high", description="Detects suspicious PowerShell execution"),
+            DetectionMapping(
+                rule_id="91815",
+                confidence="medium",
+                description="Wazuh detects process discovery executed through PowerShell",
+            ),
         ],
         parameters=[
             TechniqueParameter(name="command", description="PowerShell command to execute", type="string", required=True, default="Write-Output 'PurpleStrike PowerShell simulation'"),
@@ -85,10 +90,10 @@ EXECUTION_TECHNIQUES = [
         ],
     ),
     Technique(
-        technique_id="T1569.001",
-        name="System Services: Launch Agent",
+        technique_id="T1569.003",
+        name="System Services: Systemctl",
         tactic=TacticID.EXECUTION,
-        description="Uses launch agents for execution on macOS (simulated on Linux via systemd)",
+        description="Executes a benign command through a temporary systemd service on Linux",
         target_os=["linux"],
         executor="custom_python",
         module="execution.launch_agent",

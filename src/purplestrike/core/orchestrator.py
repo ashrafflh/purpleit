@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from rich.console import Console
 from rich.table import Table
@@ -41,12 +42,18 @@ class Orchestrator:
         self._set_target_credentials()
 
     def _set_target_credentials(self) -> None:
-        from purplestrike.techniques.connection import set_target_credentials
+        from purplestrike.techniques.connection import set_target_credentials, set_target_platforms
         set_target_credentials(
             domain=self.config.target_ad_domain,
             username=self.config.target_username,
             password=self.config.target_password,
         )
+        set_target_platforms({
+            address: str(host.os)
+            for group in self.config.target_groups.values()
+            for host in group.hosts
+            for address in (host.hostname, host.ip)
+        })
 
     async def generate_plan(
         self,
@@ -77,6 +84,10 @@ class Orchestrator:
         import yaml
 
         path = playbook_path
+        if path is None and playbook_name:
+            supplied_path = Path(playbook_name)
+            if supplied_path.is_file():
+                path = supplied_path
         if path is None and playbook_name:
             for pb_dir in [
                 Path.home() / ".purplestrike" / "playbooks",
@@ -224,6 +235,9 @@ class Orchestrator:
             for p in technique.parameters
             if p.default is not None
         }
+        for resource_name in ("task_name", "service_name"):
+            if resource_name in parameters:
+                parameters[resource_name] = f"{parameters[resource_name]}_{uuid4().hex[:10]}"
         target_group = self.config.target_groups.get(target_group_name)
 
         if target_group and target_group.domain and "domain" not in parameters:
@@ -384,6 +398,7 @@ class Orchestrator:
             )
 
             detection_result = DetectionResult(status=DetectionStatus.UNKNOWN)
+            validation_end = step_end
             if siem_connector:
                 import asyncio
                 await asyncio.sleep(self.config.detection_check_delay)
@@ -395,8 +410,10 @@ class Orchestrator:
                     start_time=step_start,
                     end_time=validation_end,
                     plugin_registry=plugin_registry,
+                    execution_output=technique_result.output,
                 )
 
+            detection_result = self._account_for_execution(detection_result, technique_result.success)
             det_status = detection_result.status
             det_icon = {
                 "detected": "[green]DETECTED[/green]",
@@ -411,6 +428,8 @@ class Orchestrator:
                 f"({technique_result.execution_time_seconds:.1f}s)"
             )
             console.print(f"    {det_icon.get(det_status, det_status)}")
+            if not technique_result.success and technique_result.error:
+                console.print(f"    Error: {technique_result.error[:500]}", markup=False)
 
             sim_step = SimulationStep(
                 step=i,
@@ -420,21 +439,28 @@ class Orchestrator:
                 target=execution_target,
                 execution_status=exec_status,
                 execution_time_seconds=technique_result.execution_time_seconds,
+                execution_started_at=step_start,
+                execution_ended_at=step_end,
+                validation_ended_at=validation_end,
                 execution_output=technique_result.output,
                 execution_error=technique_result.error,
                 artifacts=technique_result.artifacts,
                 detection_result=detection_result,
             )
             sim_steps.append(sim_step)
+            if not skip_cleanup:
+                cleanup_plan = plan.model_copy(update={"steps": [plan_step]})
+                await self._cleanup_all(cleanup_plan, plugin_registry, target=execution_target)
 
         if siem_connector:
             with suppress(Exception):
                 await siem_connector.teardown()
 
-        if not skip_cleanup:
-            await self._cleanup_all(plan, plugin_registry, target=execution_target)
-
         simulation.steps = sim_steps
+        if simulation.status == SimulationStatus.COMPLETED and any(
+            step.execution_status != ExecutionStatus.SUCCESS for step in sim_steps
+        ):
+            simulation.status = SimulationStatus.PARTIAL
         summary = SimulationSummary.from_steps(sim_steps)
 
         remediation_entries = self._generate_remediation(sim_steps)
@@ -504,6 +530,22 @@ class Orchestrator:
         result.execution_time_seconds = time.monotonic() - start
         return result
 
+    @staticmethod
+    def _account_for_execution(result: DetectionResult, success: bool) -> DetectionResult:
+        if success:
+            return result
+        if result.status == DetectionStatus.DETECTED:
+            result.status = DetectionStatus.PARTIALLY_DETECTED
+            result.confidence = min(result.confidence, 0.7)
+        elif result.status == DetectionStatus.NOT_DETECTED:
+            result.status = DetectionStatus.UNKNOWN
+        result.ai_correlation_reasoning = " ".join(filter(None, [
+            result.ai_correlation_reasoning,
+            "Execution failed. Any matched alerts describe the attempted activity; "
+            "this run cannot establish detection coverage for successful execution.",
+        ]))
+        return result
+
     async def _validate_detection(
         self,
         siem_connector: Any,
@@ -512,6 +554,7 @@ class Orchestrator:
         start_time: datetime,
         end_time: datetime,
         plugin_registry: Any,
+        execution_output: str = "",
     ) -> DetectionResult:
         from purplestrike.validation.engine import DetectionValidationEngine
 
@@ -527,6 +570,8 @@ class Orchestrator:
             target=target,
             start_time=start_time,
             end_time=end_time,
+            command=plan_step.parameters.get("command"),
+            execution_output=execution_output,
         )
 
     def _calculate_risk(self, technique_id: str, detection_status: DetectionStatus) -> RiskResult:

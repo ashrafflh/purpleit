@@ -53,6 +53,7 @@ class DetectionMapping(BaseModel):
 
 class Technique(BaseModel):
     technique_id: str
+    mitre_technique_id: str | None = None
     name: str
     tactic: TacticID
     description: str = ""
@@ -63,6 +64,11 @@ class Technique(BaseModel):
     module: str = ""
     risk_level: str = "medium"
     safe_to_execute: bool = True
+    validation_notes: str = ""
+
+    @property
+    def detection_technique_id(self) -> str:
+        return self.mitre_technique_id or self.technique_id
 
     @property
     def tactic_name(self) -> str:

@@ -37,11 +37,7 @@ anthropic = ["anthropic>=0.18.0"]
 ollama = ["ollama>=0.4.0"]
 ssh = ["asyncssh>=2.14.0"]
 all = [
-<<<<<<< Updated upstream
-    "purplestrike[openai,deepseek,anthropic,ollama,ssh,winrm]",
-=======
-    "purplestrike[openai,anthropic,ollama,ssh]",
->>>>>>> Stashed changes
+    "purplestrike[openai,deepseek,anthropic,ollama,ssh]",
 ]
 dev = [
     "pytest>=8.0.0",

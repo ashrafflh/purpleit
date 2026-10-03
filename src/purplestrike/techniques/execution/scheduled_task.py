@@ -5,22 +5,42 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import delete_temp_files, ps_quote
 
 logger = logging.getLogger(__name__)
+_created_tasks: set[tuple[str, str]] = set()
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
-    """Create a scheduled task to test detection without running it."""
+    """Create and run the test task, checking its actual execution result."""
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
         task_name = parameters.get("task_name", "PurpleStrikeTask")
-        command = parameters.get("command", "")
-        out_path = "$env:TEMP\\purplestrike_scheduled_task_output.txt"
-        full_cmd = f'cmd /c {command} > {out_path} 2>&1'
+        command = parameters.get("command") or "whoami"
         result = await conn.run_ps(
-            f'schtasks /create /tn "{task_name}" /tr "{full_cmd}" '
-            f'/sc once /st 00:00 /f'
+            "$ErrorActionPreference = 'Stop'; "
+            f"$command = {ps_quote(command)}; "
+            "$outPath = Join-Path $env:TEMP 'purplestrike_scheduled_task_output.txt'; "
+            "[IO.File]::Delete($outPath); "
+            "$arguments = '/d /s /c \"' + $command + ' > \"' + $outPath + '\" 2>&1\"'; "
+            "$action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument $arguments; "
+            f"Register-ScheduledTask -TaskName {ps_quote(task_name)} -Action $action "
+            "-User ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) "
+            "-RunLevel Highest -ErrorAction Stop"
+        )
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout or "Task creation failed")
+        _created_tasks.add((target, task_name))
+        result = await conn.run_ps(
+            "$ErrorActionPreference = 'Stop'; "
+            f"$name = {ps_quote(task_name)}; Start-ScheduledTask -TaskName $name; "
+            "Start-Sleep -Seconds 3; "
+            "$info = Get-ScheduledTaskInfo -TaskName $name; "
+            "if ($info.LastTaskResult -ne 0) { throw ('Task execution failed: ' + "
+            "$info.LastTaskResult) }; "
+            "Get-Content -LiteralPath (Join-Path $env:TEMP "
+            "'purplestrike_scheduled_task_output.txt') -ErrorAction Stop"
         )
         success = result.success
         return TechniqueResult(
@@ -43,23 +63,23 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             await conn.disconnect()
 
 
-async def cleanup(target: str) -> None:
+async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        name = (parameters or {}).get("task_name", "PurpleStrikeTask")
+        if (target, name) not in _created_tasks:
+            return
         conn = await get_connection(target)
-        task_list = await conn.run_ps(
-            'Get-ScheduledTask | Where-Object { $_.TaskName -like "PurpleStrike*" } '
-            '| Select-Object -ExpandProperty TaskName'
+        result = await conn.run_ps(
+            f"Unregister-ScheduledTask -TaskName {ps_quote(name)} -Confirm:$false -ErrorAction Stop"
         )
-        for name in task_list.stdout.strip().splitlines():
-            name = name.strip()
-            if name:
-                await conn.run_ps(f'schtasks /delete /tn "{name}" /f')
-        await conn.run_ps(
-            "Remove-Item $env:TEMP\\purplestrike_scheduled_task_output.txt "
-            "-ErrorAction SilentlyContinue"
-        )
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
+        _created_tasks.discard((target, name))
+        result = await conn.run_ps(delete_temp_files('purplestrike_scheduled_task_output.txt'))
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
     except Exception as e:
         logger.warning(f"T1053.005 cleanup failed: {e}")
     finally:

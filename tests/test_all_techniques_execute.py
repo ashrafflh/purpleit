@@ -111,8 +111,10 @@ def _module_for(technique: Technique) -> Any:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("platform", ["windows", "linux"])
 async def test_all_registered_techniques_execute_with_default_parameters(
     monkeypatch: pytest.MonkeyPatch,
+    platform: str,
 ) -> None:
     async def fast_sleep(seconds: float) -> None:
         return None
@@ -122,8 +124,12 @@ async def test_all_registered_techniques_execute_with_default_parameters(
     failures: list[str] = []
 
     for technique in technique_registry.list_techniques():
+        if platform not in technique.target_os:
+            continue
         module = _module_for(technique)
         fake = FakeConnection()
+        fake.is_windows = platform == "windows"
+        fake.os_type = platform
 
         async def fake_get_connection(target: str, fake: FakeConnection = fake) -> FakeConnection:
             return fake
@@ -151,30 +157,23 @@ async def test_all_registered_techniques_execute_with_default_parameters(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "technique_id",
-    [
-        "T1003.001",
-        "T1003.002",
-        "T1055.001",
-        "T1068",
-        "T1110.001",
-        "T1110.003",
-        "T1134.001",
-        "T1134.002",
-        "T1484.001",
-        "T1543.003",
-        "T1548.002",
-    ],
+    ("technique_id", "platform"),
+    [(technique.technique_id, platform)
+     for technique in technique_registry.list_techniques() for platform in technique.target_os],
 )
 async def test_techniques_fail_on_transport_command_errors(
     monkeypatch: pytest.MonkeyPatch,
     technique_id: str,
+    platform: str,
 ) -> None:
     async def fast_sleep(seconds: float) -> None:
         return None
 
     async def fake_get_connection(target: str) -> FailingConnection:
-        return FailingConnection()
+        fake = FailingConnection()
+        fake.is_windows = platform == "windows"
+        fake.os_type = platform
+        return fake
 
     monkeypatch.setattr(asyncio, "sleep", fast_sleep)
     technique = technique_registry.get_technique(technique_id)

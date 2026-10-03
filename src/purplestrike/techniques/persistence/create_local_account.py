@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import ps_quote
 
 logger = logging.getLogger(__name__)
+_created_accounts: set[tuple[str, str]] = set()
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -14,14 +17,16 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        username = parameters.get("username", "")
-        os_type = parameters.get("os", "windows")
+        username = parameters.get("username") or "purplestrike_local"
+        os_type = conn.os_type
         if os_type == "linux":
-            result = await conn.run_command(f"useradd {username}")
+            result = await conn.run_command(f"sudo -n useradd -- {shlex.quote(username)}")
         else:
             result = await conn.run_ps(
-                f"net user {username} PurpleStrike123! /add"
+                f"net user {ps_quote(username)} 'PurpleStrike1!' /add"
             )
+        if result.success:
+            _created_accounts.add((target, username))
         return TechniqueResult(
             technique_id="T1136.001",
             success=result.success,
@@ -46,13 +51,18 @@ async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        username = (parameters or {}).get("username") or "purplestrike_local"
+        if (target, username) not in _created_accounts:
+            return
         conn = await get_connection(target)
-        username = parameters.get("username", "") if parameters else ""
-        os_type = parameters.get("os", "windows") if parameters else "windows"
+        os_type = conn.os_type
         if os_type == "linux":
-            await conn.run_command(f"userdel -r {username}")
+            result = await conn.run_command(f"sudo -n userdel -- {shlex.quote(username)}")
         else:
-            await conn.run_ps(f"net user {username} /delete")
+            result = await conn.run_ps(f"net user {ps_quote(username)} /delete")
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
+        _created_accounts.discard((target, username))
     except Exception as e:
         logger.warning(f"T1136.001 cleanup failed: {e}")
     finally:

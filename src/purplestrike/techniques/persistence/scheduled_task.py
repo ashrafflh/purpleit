@@ -5,8 +5,10 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import ps_quote
 
 logger = logging.getLogger(__name__)
+_created_tasks: set[tuple[str, str]] = set()
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -15,14 +17,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     try:
         conn = await get_connection(target)
         task_name = parameters.get("task_name", "PurpleStrikeTask")
-        command = parameters.get("command", "")
+        command = parameters.get("command") or "cmd.exe /c echo PurpleStrike"
         ps_cmd = (
-            f'$Action = New-ScheduledTaskAction -Execute "{command}";'
+            "$ErrorActionPreference = 'Stop'; "
+            f"$Action = New-ScheduledTaskAction -Execute 'cmd.exe' "
+            f"-Argument {ps_quote('/d /c ' + command)};"
             f"$Trigger = New-ScheduledTaskTrigger -AtLogOn;"
-            f"Register-ScheduledTask -TaskName '{task_name}' "
+            f"Register-ScheduledTask -TaskName {ps_quote(task_name)} "
             f"-Action $Action -Trigger $Trigger -RunLevel Highest"
         )
         result = await conn.run_ps(ps_cmd)
+        if result.success:
+            _created_tasks.add((target, task_name))
         return TechniqueResult(
             technique_id="T1053.005p",
             success=result.success,
@@ -43,12 +49,20 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             await conn.disconnect()
 
 
-async def cleanup(target: str) -> None:
+async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        name = (parameters or {}).get("task_name", "PurpleStrikeTask")
+        if (target, name) not in _created_tasks:
+            return
         conn = await get_connection(target)
-        await conn.run_ps("Unregister-ScheduledTask -TaskName 'PurpleStrikeTask' -Confirm:$false")
+        result = await conn.run_ps(
+            f"Unregister-ScheduledTask -TaskName {ps_quote(name)} -Confirm:$false -ErrorAction Stop"
+        )
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
+        _created_tasks.discard((target, name))
     except Exception as e:
         logger.warning(f"T1053.005p cleanup failed: {e}")
     finally:

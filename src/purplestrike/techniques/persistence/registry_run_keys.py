@@ -5,8 +5,11 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import ps_quote, registry_path
 
 logger = logging.getLogger(__name__)
+DEFAULT_KEY = r"HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+_created_keys: set[tuple[str, str]] = set()
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -14,13 +17,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        key_path = parameters.get("key_path", "")
-        value = parameters.get("value", "")
+        key_path = registry_path(parameters.get("key_path") or DEFAULT_KEY)
+        value = parameters.get("value") or "cmd.exe /c echo PurpleStrike"
         ps_cmd = (
-            f"New-ItemProperty -Path '{key_path}' "
-            f"-Name 'PurpleStrike' -Value '{value}' -PropertyType String -Force"
+            f"$keyPath = {ps_quote(key_path)}; "
+            "if (-not (Test-Path -LiteralPath $keyPath)) { "
+            "New-Item -Path $keyPath -Force | Out-Null }; "
+            "New-ItemProperty -LiteralPath $keyPath "
+            f"-Name 'PurpleStrike' -Value {ps_quote(value)} -PropertyType String -ErrorAction Stop"
         )
         result = await conn.run_ps(ps_cmd)
+        if result.success:
+            _created_keys.add((target, key_path))
         return TechniqueResult(
             technique_id="T1547.001",
             success=result.success,
@@ -45,18 +53,16 @@ async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        ps_path = registry_path((parameters or {}).get("key_path") or DEFAULT_KEY)
+        if (target, ps_path) not in _created_keys:
+            return
         conn = await get_connection(target)
-        key_path = parameters.get("key_path", "") if parameters else ""
-        if key_path:
-            ps_path = key_path.replace("HKLM\\", "HKLM:\\").replace(
-                "HKLM\\\\", "HKLM:\\"
-            )
-        else:
-            ps_path = "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run"
-        await conn.run_ps(
-            f"Remove-ItemProperty -Path '{ps_path}' "
+        result = await conn.run_ps(
+            f"Remove-ItemProperty -LiteralPath {ps_quote(ps_path)} "
             f"-Name 'PurpleStrike' -ErrorAction SilentlyContinue"
         )
+        if result.success:
+            _created_keys.discard((target, ps_path))
     except Exception as e:
         logger.warning(f"T1547.001 cleanup failed: {e}")
     finally:

@@ -20,8 +20,9 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 result = await conn.run_ps(
                     "Get-Service TermService -ErrorAction SilentlyContinue | "
                     "Select-Object Name,Status,StartType | Format-List; "
-                    "Test-Connection -ComputerName localhost -Count 1 -Quiet; "
-                    "query termserver 2>$null"
+                    "$listener = Get-NetTCPConnection -LocalPort 3389 -State Listen "
+                    "-ErrorAction SilentlyContinue; "
+                    "Write-Output ('RDP listener present: ' + [bool]$listener)"
                 )
             elif service_type == "vpn":
                 result = await conn.run_ps(

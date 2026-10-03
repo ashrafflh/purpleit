@@ -76,9 +76,12 @@ async def test_sam_dump_cleanup_removes_only_purplestrike_temp_artifacts(monkeyp
     fake_conn = FakeConnection()
     _patch_connection(monkeypatch, fake_conn)
 
+    sam_dump._artifacts["10.10.1.108"] = "purplestrike_sam_test"
     await sam_dump.cleanup("10.10.1.108")
 
     assert len(fake_conn.scripts) == 1
-    assert "Remove-Item -Path 'C:\\Windows\\Temp\\SAM_*'" in fake_conn.scripts[0]
+    assert "[IO.File]::Delete" in fake_conn.scripts[0]
+    assert "purplestrike_sam_test.hive" in fake_conn.scripts[0]
+    assert "SAM_*" not in fake_conn.scripts[0]
     assert "vssadmin delete shadows" not in fake_conn.scripts[0]
     assert fake_conn.disconnected is True

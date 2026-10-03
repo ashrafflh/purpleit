@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
@@ -14,8 +15,8 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        command = parameters.get("command", "")
-        result = await conn.run_command(command)
+        command = parameters.get("command") or "echo PurpleStrike bash simulation"
+        result = await conn.run_command(f"bash -c {shlex.quote(command)}")
         return TechniqueResult(
             technique_id="T1059.004",
             success=result.success,
@@ -37,14 +38,4 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
 
 
 async def cleanup(target: str) -> None:
-    """Reverse any changes made during execution."""
-    conn: TargetConnection | None = None
-    try:
-        conn = await get_connection(target)
-        await conn.run_command("history -c")
-        await conn.run_command("truncate -s 0 ~/.bash_history")
-    except Exception as e:
-        logger.warning(f"T1059.004 cleanup failed: {e}")
-    finally:
-        if conn:
-            await conn.disconnect()
+    """The default command creates no artifacts; preserve the user's history."""

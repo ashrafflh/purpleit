@@ -31,7 +31,12 @@ class NvidiaProvider:
             import httpx
 
             headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-            self._client = httpx.AsyncClient(base_url=self._base_url, timeout=120.0, headers=headers)
+            import ssl
+
+            self._client = httpx.AsyncClient(
+                base_url=self._base_url, timeout=120.0, headers=headers,
+                verify=ssl.create_default_context(),
+            )
         except ImportError:
             logger.error("httpx not installed. Required for NVIDIA provider.")
             self._client = None

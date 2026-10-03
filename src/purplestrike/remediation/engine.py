@@ -13,7 +13,7 @@ from purplestrike.models.simulation import DetectionStatus, SimulationStep
 logger = logging.getLogger(__name__)
 
 REMEDIATION_DB: dict[str, dict] = {
-    "T1558.001": {
+    "T1558.003": {
         "wazuh": WazuhRemediation(
             confidence=RemediationConfidence.HIGH,
             rule_xml=(
@@ -23,21 +23,21 @@ REMEDIATION_DB: dict[str, dict] = {
                 '    <field name="win.system.eventID">4769</field>\n'
                 '    <field name="win.eventdata.ticketEncryptionType">0x17</field>\n'
                 '    <description>Kerberoasting detected: RC4-encrypted TGS ticket requested for SPN account</description>\n'
-                '    <mitre><id>T1558.001</id></mitre>\n'
+                '    <mitre><id>T1558.003</id></mitre>\n'
                 '  </rule>\n'
                 '</group>'
             ),
             log_sources_required=["Windows Security Event Log"],
-            testing_instructions="Run: purplestrike run --techniques T1558.001 --target-group <group>",
+            testing_instructions="Run: purplestrike run --techniques T1558.003 --target-group <group>",
         ),
         "generic": GenericGuidance(
             data_sources=["Windows Security Event Log (Event ID 4769)", "Sysmon Event ID 1"],
             detection_logic="Monitor for Event 4769 where TicketEncryptionType = 0x17 (RC4) and ServiceName matches an SPN account pattern",
             false_positive_considerations="Legitimate service ticket requests may use RC4 for older services; correlate with account sensitivity",
-            references=["https://attack.mitre.org/techniques/T1558/001/"],
+            references=["https://attack.mitre.org/techniques/T1558/003/"],
         ),
     },
-    "T1558.002": {
+    "T1558.004": {
         "wazuh": WazuhRemediation(
             confidence=RemediationConfidence.HIGH,
             rule_xml=(
@@ -46,18 +46,18 @@ REMEDIATION_DB: dict[str, dict] = {
                 '    <field name="win.system.eventID">4768</field>\n'
                 '    <field name="win.eventdata.preAuthType">0</field>\n'
                 '    <description>AS-REP Roasting detected: AS-REQ without pre-auth for vulnerable account</description>\n'
-                '    <mitre><id>T1558.002</id></mitre>\n'
+                '    <mitre><id>T1558.004</id></mitre>\n'
                 '  </rule>\n'
                 '</group>'
             ),
             log_sources_required=["Windows Security Event Log"],
-            testing_instructions="Run: purplestrike run --techniques T1558.002 --target-group <group>",
+            testing_instructions="Run: purplestrike run --techniques T1558.004 --target-group <group>",
         ),
         "generic": GenericGuidance(
             data_sources=["Windows Security Event Log (Event ID 4768)"],
             detection_logic="Monitor for Event 4768 where pre-authentication is not required (preAuthType = 0)",
             false_positive_considerations="Some service accounts legitimately have pre-auth disabled; audit DONT_REQ_PREAUTH attribute",
-            references=["https://attack.mitre.org/techniques/T1558/002/"],
+            references=["https://attack.mitre.org/techniques/T1558/004/"],
         ),
     },
     "T1003.001": {

@@ -293,7 +293,7 @@ purplestrike run --mode playbook --playbook ad_credential_harvesting \
 purplestrike plan --mode agent --target-group production_win
 
 # Check what your SIEM covers
-purplestrike siem rules --technique T1558.001
+purplestrike siem rules --technique T1558.003
 ```
 
 ---
@@ -322,7 +322,7 @@ purplestrike run \
     --mode agent \                    # agent | playbook
     --playbook ad_credential_harvesting \  # playbook name (for playbook mode)
     --tactics TA0001,TA0002 \         # filter by MITRE tactic IDs
-    --techniques T1558.001,T1059.001 \# filter by technique IDs
+    --techniques T1558.003,T1059.001 \# filter by technique IDs
     --max-steps 20 \                  # max attack steps
     --detection-check-delay 30 \      # seconds to wait before querying SIEM
     --output-dir ./results \          # report output directory
@@ -357,7 +357,7 @@ purplestrike techniques list
 purplestrike techniques list --tactic TA0006
 
 # Show technique details, parameters, and detection mappings
-purplestrike techniques show T1558.001
+purplestrike techniques show T1558.003
 ```
 
 ### `purplestrike siem`
@@ -463,10 +463,18 @@ purplestrike playbooks validate path/to/playbook.yaml
 | Tactic | ID | Techniques |
 |---|---|---|
 | Initial Access (TA0001) | T1190, T1133, T1078.001–003, T1566.001–002 | 8 |
-| Execution (TA0002) | T1059.001–005, T1047, T1569.001–002, T1204.001–002, T1053.005 | 11 |
+| Execution (TA0002) | T1059.001–005, T1047, T1569.002–003, T1204.001–002, T1053.005 | 11 |
 | Persistence (TA0003) | T1053.005p, T1547.001, T1547.004, T1546.001, T1546.003, T1546.008, T1136.001–002 | 8 |
 | Privilege Escalation (TA0004) | T1548.001–002, T1068, T1543.003, T1134.001–002, T1484.001, T1055.001 | 7 |
-| Credential Access (TA0006) | T1558.001–002, T1110.001–003, T1552.001–002, T1003.001–002 | 8 |
+| Credential Access (TA0006) | T1558.003–004, T1110.001–003, T1552.001–002, T1003.001–002 | 8 |
+
+Execution success means the implemented simulation completed. Several modules only
+enumerate prerequisites or create benign artifacts; their validation notes identify
+these limits, and their results cannot claim full technique coverage. Failed
+executions are classified as unknown or partially detected when an attempt raised
+an alert. The internal persistence variant `T1053.005p` uses MITRE `T1053.005` for
+detection matching. Linux systemd execution uses `T1569.003`; Kerberoasting and
+AS-REP Roasting use `T1558.003` and `T1558.004` respectively.
 
 ---
 
@@ -577,7 +585,7 @@ report = await orchestrator.execute(
     mode="agent",
     target_group_name="production_win",
     tactics=["TA0006"],
-    technique_ids=["T1558.001"],
+    technique_ids=["T1558.003"],
 )
 ```
 
@@ -599,6 +607,8 @@ Hybrid detection validation with two layers:
 
 Returns `DetectionResult` with status (`detected` / `partially_detected` / `not_detected` / `unknown`), confidence score, matched rules, and AI reasoning.
 
+The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Queries allow a two-second clock margin (`siem.extra.clock_skew_seconds`), checking Windows event timestamps at the boundary to avoid including earlier cleanup events. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches, and probe-only or failed executions cannot establish full technique coverage.
+
 #### Risk Quantifier (`risk/quantifier.py`)
 
 FAIR-inspired financial risk model:
@@ -612,7 +622,7 @@ FAIR-inspired financial risk model:
 
 For every undetected technique, generates:
 
-- **Wazuh-specific remediation** — Custom Wazuh rule XML (with MITRE tag), log source requirements, and testing instructions. Built-in database covers 6 key techniques (T1558.001, T1558.002, T1003.001, T1003.002, T1110.001, T1110.003)
+- **Wazuh-specific remediation** — Custom Wazuh rule XML (with MITRE tag), log source requirements, and testing instructions. Built-in database covers 6 key techniques (T1558.003, T1558.004, T1003.001, T1003.002, T1110.001, T1110.003)
 - **Generic guidance** — Data sources, detection logic, false positive considerations, and MITRE references for all 42 techniques
 
 #### Simulation Store (`reporting/store.py`)
@@ -651,7 +661,7 @@ from purplestrike.techniques.registry import technique_registry
 all_techniques = technique_registry.list_techniques()
 
 # Get a specific technique
-t = technique_registry.get_technique("T1558.001")
+t = technique_registry.get_technique("T1558.003")
 print(t.name, t.detection_mappings, t.parameters)
 ```
 

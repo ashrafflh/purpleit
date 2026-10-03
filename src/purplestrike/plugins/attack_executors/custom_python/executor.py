@@ -41,6 +41,18 @@ class CustomPythonExecutor:
                 execution_status=ExecutionStatus.FAILURE,
             )
 
+        parameters = {
+            **{p.name: p.default for p in technique.parameters if p.default is not None},
+            **{key: value for key, value in parameters.items() if value is not None},
+        }
+        missing = [p.name for p in technique.parameters
+                   if p.required and parameters.get(p.name) in (None, "")]
+        if missing:
+            return TechniqueResult(
+                technique_id=technique_id, success=False,
+                error=f"Missing required parameters: {', '.join(missing)}",
+                execution_status=ExecutionStatus.FAILURE,
+            )
         module_path = technique.module
         if not module_path:
             return TechniqueResult(
@@ -64,6 +76,7 @@ class CustomPythonExecutor:
             if hasattr(module, "execute"):
                 result = await module.execute(target=target, parameters=parameters)
                 if isinstance(result, TechniqueResult):
+                    result.execution_time_seconds = time.monotonic() - start
                     return result
                 return TechniqueResult(
                     technique_id=technique_id,

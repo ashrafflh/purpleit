@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from purplestrike.techniques.scripts import delete_temp_files
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
@@ -67,14 +68,9 @@ async def cleanup(target: str) -> None:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        await conn.run_ps(
-            "Remove-Item -LiteralPath (Join-Path $env:TEMP 'purplestrike_test.vbs') "
-            "-ErrorAction SilentlyContinue"
-        )
-        await conn.run_ps(
-            "Remove-Item -LiteralPath (Join-Path $env:TEMP 'purplestrike_vbs_output.txt') "
-            "-ErrorAction SilentlyContinue"
-        )
+        result = await conn.run_ps(delete_temp_files('purplestrike_test.vbs', 'purplestrike_vbs_output.txt'))
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
     except Exception as e:
         logger.warning(f"T1059.005 cleanup failed: {e}")
     finally:

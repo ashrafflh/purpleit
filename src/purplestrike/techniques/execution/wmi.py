@@ -5,6 +5,7 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import delete_temp_files, ps_quote
 
 logger = logging.getLogger(__name__)
 
@@ -14,19 +15,21 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        command = parameters.get("command", "")
-        out_path = "$env:TEMP\\purplestrike_wmi_output.txt"
-        full_cmd = f'cmd /c {command} > {out_path} 2>&1'
+        command = parameters.get("command") or "whoami"
         ps_command = (
-            f'Invoke-WmiMethod -Class Win32_Process -Name Create '
-            f'-ArgumentList "{full_cmd}"'
+            "$ErrorActionPreference = 'Stop'; "
+            "$outPath = Join-Path $env:TEMP 'purplestrike_wmi_output.txt'; "
+            "[IO.File]::Delete($outPath); "
+            f"$command = {ps_quote(command)}; "
+            "$line = 'cmd.exe /d /s /c \"' + $command + ' > \"' + $outPath + '\" 2>&1\"'; "
+            "$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create "
+            "-Arguments @{CommandLine=$line}; "
+            "if ($created.ReturnValue -ne 0) { throw ('WMI process creation failed: ' + "
+            "$created.ReturnValue) }; Start-Sleep -Seconds 3; "
+            "Get-Content -LiteralPath $outPath -ErrorAction Stop"
         )
         result = await conn.run_ps(ps_command)
-        await conn.run_ps("Start-Sleep -Seconds 3")
-        output_result = await conn.run_ps(
-            f"Get-Content {out_path} -ErrorAction SilentlyContinue"
-        )
-        combined_output = result.stdout + "\n" + output_result.stdout
+        combined_output = result.stdout
         success = result.success
         return TechniqueResult(
             technique_id="T1047",
@@ -53,18 +56,9 @@ async def cleanup(target: str) -> None:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        await conn.run_ps(
-            "Remove-Item $env:TEMP\\purplestrike_wmi_output.txt -ErrorAction SilentlyContinue"
-        )
-        proc_result = await conn.run_ps(
-            'Get-WmiObject Win32_Process | Where-Object { $_.CommandLine -like "*purplestrike*" } | '
-            'Select-Object -ExpandProperty ProcessId'
-        )
-        if proc_result.stdout.strip():
-            for pid in proc_result.stdout.strip().split("\n"):
-                pid = pid.strip()
-                if pid:
-                    await conn.run_ps(f"Stop-Process -Id {pid} -Force -ErrorAction SilentlyContinue")
+        result = await conn.run_ps(delete_temp_files('purplestrike_wmi_output.txt'))
+        if not result.success:
+            raise RuntimeError(result.stderr or result.stdout)
     except Exception as e:
         logger.warning(f"T1047 cleanup failed: {e}")
     finally:

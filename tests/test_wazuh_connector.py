@@ -124,6 +124,25 @@ async def test_get_rules_for_technique_uses_wazuh_mitre_filter(monkeypatch) -> N
     assert rules[0].mitre_technique_ids == ["T1078.002"]
 
 
+async def test_catalog_cache_is_shared_across_techniques(monkeypatch) -> None:
+    connector = WazuhConnector()
+    connector._client = object()
+    calls = []
+
+    async def request(method, endpoint, **kwargs):
+        calls.append(endpoint)
+        return FakeResponse({"data": {"affected_items": [
+            {"id": 1, "mitre": ["T1059.001"]},
+            {"id": 2, "mitre": ["T1053.005"]},
+        ], "total_affected_items": 2}})
+
+    monkeypatch.setattr(connector, "_request", request)
+    await connector.get_rules_for_technique("")
+    assert [r.rule_id for r in await connector.get_rules_for_technique("T1053.005")] == ["2"]
+    assert [r.rule_id for r in await connector.get_rules_for_technique("T1059.001")] == ["1"]
+    assert calls == ["/rules"]
+
+
 async def test_get_rules_for_technique_falls_back_when_wazuh_mitre_filter_500(
     monkeypatch,
 ) -> None:
@@ -173,3 +192,52 @@ async def test_get_rules_for_technique_falls_back_when_wazuh_mitre_filter_500(
     ]
     assert len(rules) == 1
     assert rules[0].mitre_technique_ids == ["T1078.002"]
+
+
+async def test_rule_lookup_reads_later_pages(monkeypatch) -> None:
+    connector = WazuhConnector()
+    connector._client = object()
+    offsets = []
+
+    async def request(method, endpoint, **kwargs):
+        offset = kwargs["params"].get("offset", 0)
+        offsets.append(offset)
+        items = ([{"id": i, "mitre": ["T1059.001"]} for i in range(500)]
+                 if offset == 0 else [{"id": 91815, "mitre": ["T1059.001"]}])
+        return FakeResponse({"data": {"affected_items": items, "total_affected_items": 501}})
+
+    monkeypatch.setattr(connector, "_request", request)
+    rules = await connector.get_rules_for_technique("T1059.001")
+    assert offsets == [0, 500]
+    assert rules[-1].rule_id == "91815"
+
+
+async def test_alert_query_failure_is_not_an_empty_result(monkeypatch) -> None:
+    connector = WazuhConnector()
+    connector._dashboard_client = object()
+
+    async def request(*args, **kwargs):
+        raise httpx.ConnectError("SIEM unavailable")
+
+    monkeypatch.setattr(connector, "_dashboard_request", request)
+    with pytest.raises(httpx.ConnectError, match="SIEM unavailable"):
+        await connector.query_alerts(datetime.now(UTC), datetime.now(UTC))
+
+
+async def test_alert_query_reads_later_pages(monkeypatch) -> None:
+    connector = WazuhConnector()
+    connector._dashboard_client = object()
+    offsets = []
+
+    async def request(*args, **kwargs):
+        offset = kwargs["json"]["params"]["body"].get("from", 0)
+        offsets.append(offset)
+        ids = range(500) if offset == 0 else [500]
+        hits = [{"_source": {"id": str(i), "timestamp": "2026-10-03T09:43:44Z",
+                             "rule": {"id": "91815"}}} for i in ids]
+        return FakeResponse({"rawResponse": {"hits": {"hits": hits}}})
+
+    monkeypatch.setattr(connector, "_dashboard_request", request)
+    alerts = await connector.query_alerts(datetime.now(UTC), datetime.now(UTC))
+    assert offsets == [0, 500]
+    assert len(alerts) == 501

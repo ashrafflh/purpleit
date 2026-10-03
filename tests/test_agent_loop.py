@@ -85,7 +85,7 @@ def test_available_techniques_match_primary_target_os() -> None:
 
     techniques = agent._get_available_techniques(
         tactics=None,
-        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+        technique_ids=["T1059.001", "T1059.004", "T1569.003"],
     )
 
     assert [technique.technique_id for technique in techniques] == ["T1059.001"]

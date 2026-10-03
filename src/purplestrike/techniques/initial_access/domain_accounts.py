@@ -5,6 +5,7 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import ldap_directory_entry
 
 logger = logging.getLogger(__name__)
 
@@ -16,22 +17,12 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         conn = await get_connection(target)
         if conn.is_windows:
             result = await conn.run_ps(
-                "try { "
-                "net user /domain 2>&1; "
-                "Write-Output '---'; "
-                "net group 'Domain Admins' /domain 2>&1; "
-                "Write-Output '---'; "
-                "net group 'Domain Users' /domain 2>&1; "
-                "Write-Output '---'; "
-                "whoami /all; "
-                "Write-Output '---'; "
-                "[System.DirectoryServices.DirectorySearcher]::new().Filter = "
-                "'(objectClass=user)'; "
-                "$searcher = [System.DirectoryServices.DirectorySearcher]::new(); "
+                ldap_directory_entry() +
+                "$searcher = New-Object System.DirectoryServices.DirectorySearcher($de); "
+                "$searcher.PageSize = 1000; "
                 "$searcher.Filter = '(objectClass=user)'; "
                 "$searcher.FindAll() | Select-Object -First 20 | "
-                "ForEach-Object { $_.Properties['samaccountname'] } "
-                "} catch { Write-Output $_.Exception.Message }"
+                "ForEach-Object { $_.Properties['samaccountname'] }"
             )
         else:
             result = await conn.run_ps(

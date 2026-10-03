@@ -75,15 +75,4 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
 
 
 async def cleanup(target: str) -> None:
-    conn: TargetConnection | None = None
-    try:
-        conn = await get_connection(target)
-        await conn.run_ps("Remove-Item -Path 'C:\\ProgramData\\lsass_*.dmp' "
-                          "-Force -ErrorAction SilentlyContinue; "
-                          "Remove-Item -Path 'C:\\Windows\\Temp\\lsass_*.dmp' "
-                          "-Force -ErrorAction SilentlyContinue")
-    except Exception as e:
-        logger.warning(f"T1003.001 cleanup failed: {e}")
-    finally:
-        if conn:
-            await conn.disconnect()
+    """This prerequisite probe creates no dumps to remove."""

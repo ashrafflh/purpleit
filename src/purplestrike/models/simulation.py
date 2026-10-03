@@ -65,6 +65,7 @@ class DetectionResult(BaseModel):
     confidence: float = 0.0
     matched_rules: list[str] = Field(default_factory=list)
     matched_alerts: list[SIEMAlert] = Field(default_factory=list)
+    candidate_alerts: list[SIEMAlert] = Field(default_factory=list)
     ai_correlation_reasoning: str | None = None
     risk: RiskResult = Field(default_factory=RiskResult)
 
@@ -84,6 +85,9 @@ class SimulationStep(BaseModel):
     target: str = ""
     execution_status: ExecutionStatus = ExecutionStatus.SUCCESS
     execution_time_seconds: float = 0.0
+    execution_started_at: datetime | None = None
+    execution_ended_at: datetime | None = None
+    validation_ended_at: datetime | None = None
     execution_output: str = ""
     execution_error: str | None = None
     artifacts: list[str] = Field(default_factory=list)

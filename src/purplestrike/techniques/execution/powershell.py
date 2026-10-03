@@ -46,16 +46,4 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
 
 
 async def cleanup(target: str) -> None:
-    """Reverse any changes made during execution."""
-    conn: TargetConnection | None = None
-    try:
-        conn = await get_connection(target)
-        await conn.run_ps("Clear-History")
-        await conn.run_ps(
-            "Remove-Item (Get-PSReadlineOption).HistorySavePath -ErrorAction SilentlyContinue"
-        )
-    except Exception as e:
-        logger.warning(f"T1059.001 cleanup failed: {e}")
-    finally:
-        if conn:
-            await conn.disconnect()
+    """The default command creates no artifacts; preserve the user's history."""

@@ -155,6 +155,15 @@ def test_target_for_group_uses_configured_hostname() -> None:
     assert orchestrator._target_for_group("purple.local") == "configured-host"
 
 
+@pytest.mark.asyncio
+async def test_playbook_cli_name_accepts_an_existing_file_path(tmp_path) -> None:
+    path = tmp_path / "audit.yaml"
+    path.write_text("name: Audit\nsteps:\n  - technique_id: T1059.001\n")
+    plan = await Orchestrator(_config())._generate_playbook_plan(playbook_name=str(path))
+    assert plan is not None
+    assert plan.steps[0].technique_id == "T1059.001"
+
+
 def test_default_plan_populates_required_parameter_defaults() -> None:
     orchestrator = Orchestrator(config=_config())
 
@@ -170,10 +179,8 @@ def test_default_plan_populates_required_parameter_defaults() -> None:
         "username": "purplestrike_domain",
         "domain": "purple.local",
     }
-    assert parameters_by_id["T1543.003"] == {
-        "service_name": "PurpleStrikePrivEscSvc",
-        "binary_path": "C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike",
-    }
+    assert parameters_by_id["T1543.003"]["service_name"].startswith("PurpleStrikePrivEscSvc_")
+    assert parameters_by_id["T1543.003"]["binary_path"] == "C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike"
 
 
 def test_default_plan_filters_steps_for_target_os() -> None:
@@ -182,10 +189,36 @@ def test_default_plan_filters_steps_for_target_os() -> None:
     plan = orchestrator._generate_default_plan(
         target_group_name="purple.local",
         tactics=None,
-        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+        technique_ids=["T1059.001", "T1059.004", "T1569.003"],
     )
 
     assert [step.technique_id for step in plan.steps] == ["T1059.001"]
+
+
+def test_default_tasks_have_distinct_names_across_steps_and_runs() -> None:
+    orchestrator = Orchestrator(config=_config())
+    names = []
+    for _ in range(2):
+        plan = orchestrator._generate_default_plan(
+            "purple.local", None, ["T1053.005", "T1053.005p"]
+        )
+        names.extend(step.parameters["task_name"] for step in plan.steps)
+    assert len(set(names)) == 4
+    assert all(name.startswith("PurpleStrike") for name in names)
+
+
+@pytest.mark.parametrize(("status", "expected"), [
+    (DetectionStatus.DETECTED, DetectionStatus.PARTIALLY_DETECTED),
+    (DetectionStatus.PARTIALLY_DETECTED, DetectionStatus.PARTIALLY_DETECTED),
+    (DetectionStatus.NOT_DETECTED, DetectionStatus.UNKNOWN),
+    (DetectionStatus.UNKNOWN, DetectionStatus.UNKNOWN),
+])
+def test_failed_execution_does_not_claim_full_coverage(status, expected) -> None:
+    result = DetectionResult(status=status, confidence=1.0, matched_rules=["123"])
+    result = Orchestrator._account_for_execution(result, success=False)
+    assert result.status == expected
+    assert result.matched_rules == ["123"]
+    assert "Execution failed" in result.ai_correlation_reasoning
 
 
 @pytest.mark.asyncio
@@ -195,7 +228,7 @@ async def test_generate_plan_default_mode_is_deterministic_and_os_filtered() -> 
     plan = await orchestrator.generate_plan(
         mode="default",
         target_group_name="purple.local",
-        technique_ids=["T1059.001", "T1059.004", "T1569.001"],
+        technique_ids=["T1059.001", "T1059.004", "T1569.003"],
     )
 
     assert plan is not None
@@ -493,6 +526,7 @@ async def test_execute_validation_window_includes_detection_delay(monkeypatch) -
             start_time: datetime,
             end_time: datetime,
             plugin_registry: Any,
+            execution_output: str = "",
         ) -> DetectionResult:
             self.validation_end_seen = end_time
             return DetectionResult(status=DetectionStatus.UNKNOWN)

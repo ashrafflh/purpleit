@@ -4,7 +4,12 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
+from purplestrike.techniques.connection import (
+    TargetConnection,
+    command_error,
+    get_connection,
+)
+from purplestrike.techniques.scripts import ldap_directory_entry
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +25,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         )
         if not gpo_list.success:
             gpo_list = await conn.run_ps(
-                "Get-ADObject -Filter {ObjectClass -eq 'groupPolicyContainer'} "
-                "-Properties DisplayName | Format-Table -AutoSize"
+                ldap_directory_entry("CN=Policies,CN=System") +
+                "$searcher = New-Object "
+                "System.DirectoryServices.DirectorySearcher($de); "
+                "$searcher.PageSize = 1000; "
+                "$searcher.Filter = '(objectClass=groupPolicyContainer)'; "
+                "$searcher.PropertiesToLoad.AddRange("
+                "@('displayName','cn')); "
+                "$searcher.FindAll() | ForEach-Object { "
+                "[PSCustomObject]@{DisplayName="
+                "$_.Properties.displayname[0]; "
+                "Name=$_.Properties.cn[0]} } "
+                "| Format-Table -AutoSize"
             )
         if not gpo_list.success:
             return TechniqueResult(

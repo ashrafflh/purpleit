@@ -5,8 +5,10 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
+from purplestrike.techniques.scripts import ps_quote
 
 logger = logging.getLogger(__name__)
+_created_services: set[tuple[str, str]] = set()
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -24,9 +26,9 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             )
         conn = await get_connection(target)
         create_result = await conn.run_ps(
-            f"New-Service -Name '{service_name}' "
-            f"-BinaryPathName '{binary_path}' "
-            f"-DisplayName '{service_name}' -StartupType Manual"
+            f"New-Service -Name {ps_quote(service_name)} "
+            f"-BinaryPathName {ps_quote(binary_path)} "
+            f"-DisplayName {ps_quote(service_name)} -StartupType Manual -ErrorAction Stop"
         )
         if not create_result.success:
             return TechniqueResult(
@@ -36,6 +38,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 error=create_result.stderr[:1024],
                 execution_status=ExecutionStatus.FAILURE,
             )
+        _created_services.add((target, service_name))
         verify = await conn.run_ps(
             f"Get-Service -Name '{service_name}' | Format-List Name,Status,StartType"
         )
@@ -67,16 +70,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             await conn.disconnect()
 
 
-async def cleanup(target: str) -> None:
+async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
+        name = (parameters or {}).get("service_name", "PurpleStrikePrivEscSvc")
+        if (target, name) not in _created_services:
+            return
         conn = await get_connection(target)
-        await conn.run_ps(
-            "$services = Get-Service | Where-Object { $_.StartType -eq 'Manual' "
-            "-and $_.Status -eq 'Stopped' }; foreach ($svc in $services) { "
-            "sc.exe delete $svc.Name 2>$null }"
-        )
+        result = await conn.run_ps(f"sc.exe delete {ps_quote(name)}")
+        if not result.success:
+            raise RuntimeError(command_error(result))
+        _created_services.discard((target, name))
     except Exception as e:
         logger.warning(f"T1543.003 cleanup failed: {e}")
     finally:

@@ -7,7 +7,7 @@ from purplestrike.models.techniques import (
 
 CREDENTIAL_ACCESS_TECHNIQUES = [
     Technique(
-        technique_id="T1558.001",
+        technique_id="T1558.003",
         name="Steal or Forge Kerberos Tickets: Kerberoasting",
         tactic=TacticID.CREDENTIAL_ACCESS,
         description=(
@@ -49,7 +49,7 @@ CREDENTIAL_ACCESS_TECHNIQUES = [
         ],
     ),
     Technique(
-        technique_id="T1558.002",
+        technique_id="T1558.004",
         name="Steal or Forge Kerberos Tickets: AS-REP Roasting",
         tactic=TacticID.CREDENTIAL_ACCESS,
         description=(

@@ -35,9 +35,12 @@ class WazuhConnector:
         self._token: str | None = None
         self._client: httpx.AsyncClient | None = None
         self._dashboard_client: httpx.AsyncClient | None = None
+        self._all_rule_items: list[dict[str, Any]] | None = None
 
     async def setup(self, config: dict[str, Any]) -> None:
         import os
+
+        self._all_rule_items = None
 
         nested_siem_config = config.get("siem")
         if "api_url" not in config and isinstance(nested_siem_config, dict):
@@ -192,7 +195,7 @@ class WazuhConnector:
         source: str | None = None,
     ) -> list[SIEMAlert]:
         if self._dashboard_client is None:
-            return []
+            raise RuntimeError("Wazuh Dashboard client is not initialized")
 
         filters: list[dict[str, Any]] = [
             {
@@ -232,7 +235,8 @@ class WazuhConnector:
             }
         }
 
-        try:
+        alerts: list[SIEMAlert] = []
+        while True:
             response = await self._dashboard_request(
                 "POST",
                 "/internal/search/opensearch",
@@ -240,21 +244,27 @@ class WazuhConnector:
             )
             response.raise_for_status()
             data = response.json()
-            hits = data.get("rawResponse", {}).get("hits", {}).get("hits", [])
-            return [self._parse_alert(hit.get("_source", hit)) for hit in hits]
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Wazuh API error querying alerts: {e}")
-            return []
-        except Exception as e:
-            logger.error(f"Failed to query Wazuh alerts: {e}")
-            return []
+            raw_response = data.get("rawResponse", {})
+            if (data.get("isRunning") or data.get("isPartial")
+                    or raw_response.get("timed_out")
+                    or raw_response.get("_shards", {}).get("failed", 0)):
+                raise RuntimeError("Wazuh returned an incomplete alert search")
+            if "hits" not in raw_response or "hits" not in raw_response["hits"]:
+                raise RuntimeError("Wazuh returned an invalid alert search response")
+            hits = raw_response["hits"]["hits"]
+            alerts.extend(self._parse_alert(hit.get("_source", hit)) for hit in hits)
+            if len(hits) < 500:
+                return alerts
+            if len(alerts) >= 10000:
+                raise RuntimeError("Wazuh alert search exceeded 10000 results; narrow the window")
+            payload["params"]["body"]["from"] = len(alerts)
 
     async def get_rule(self, rule_id: str) -> SIEMRule | None:
         if self._client is None:
             return None
 
         try:
-            response = await self._request("GET", f"/rules/{rule_id}")
+            response = await self._request("GET", "/rules", params={"rule_ids": rule_id})
             response.raise_for_status()
             data = response.json()
             items = data.get("data", {}).get("affected_items", [])
@@ -267,15 +277,18 @@ class WazuhConnector:
     async def get_rules_for_technique(self, technique_id: str) -> list[SIEMRule]:
         if self._client is None:
             return []
+        if self._all_rule_items is not None:
+            return [self._parse_rule(rule) for rule in self._all_rule_items
+                    if not technique_id or self._rule_matches_technique(rule, technique_id)]
 
         params: dict[str, Any] = {"limit": 500}
         if technique_id:
             params["mitre"] = technique_id
 
         try:
-            response = await self._request("GET", "/rules", params=params)
-            response.raise_for_status()
-            data = response.json()
+            items = await self._get_rule_items(params)
+            if not technique_id:
+                self._all_rule_items = items
         except httpx.HTTPStatusError as e:
             if technique_id and e.response.status_code >= 500:
                 logger.warning(
@@ -284,9 +297,8 @@ class WazuhConnector:
                     e,
                 )
                 try:
-                    response = await self._request("GET", "/rules", params={"limit": 500})
-                    response.raise_for_status()
-                    data = response.json()
+                    items = await self._get_rule_items({"limit": 500})
+                    self._all_rule_items = items
                 except Exception as fallback_error:
                     logger.error(f"Failed to get rules for technique {technique_id}: {fallback_error}")
                     return []
@@ -297,10 +309,25 @@ class WazuhConnector:
             logger.error(f"Failed to get rules for technique {technique_id}: {e}")
             return []
 
-        items = data.get("data", {}).get("affected_items", [])
         if technique_id:
             items = [r for r in items if self._rule_matches_technique(r, technique_id)]
         return [self._parse_rule(r) for r in items]
+
+    async def _get_rule_items(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        params = dict(params)
+        while True:
+            response = await self._request("GET", "/rules", params=params)
+            response.raise_for_status()
+            data = response.json().get("data", {})
+            page = data.get("affected_items", [])
+            items.extend(page)
+            total = data.get("total_affected_items")
+            if total is not None and len(items) >= total:
+                return items
+            if not page or (total is None and len(page) < params["limit"]):
+                return items
+            params["offset"] = len(items)
 
     async def teardown(self) -> None:
         if self._client:
@@ -310,6 +337,7 @@ class WazuhConnector:
             await self._dashboard_client.aclose()
             self._dashboard_client = None
         self._token = None
+        self._all_rule_items = None
 
     def _parse_alert(self, raw: dict[str, Any]) -> SIEMAlert:
         rule_data = raw.get("rule", {})
