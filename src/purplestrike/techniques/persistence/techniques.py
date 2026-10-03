@@ -26,7 +26,7 @@ PERSISTENCE_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="task_name",
-                description="Scheduled task name",
+                description="Scheduled task name prefix; execution adds a unique suffix",
                 type="string",
                 required=True,
                 default="PurpleStrikeTask",
@@ -63,6 +63,11 @@ PERSISTENCE_TECHNIQUES = [
                 type="string",
                 required=True,
                 default="HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            ),
+            TechniqueParameter(
+                name="value_name",
+                description="Registry value name prefix; each execution adds a unique suffix",
+                default="PurpleStrike",
             ),
             TechniqueParameter(
                 name="value",
@@ -177,7 +182,7 @@ PERSISTENCE_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="username",
-                description="Account username to create",
+                description="Account username prefix; execution shortens it and adds a unique suffix",
                 type="string",
                 required=True,
                 default="purplestrike_local",
@@ -201,7 +206,7 @@ PERSISTENCE_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="username",
-                description="Domain account username to create",
+                description="Domain username prefix; execution shortens it and adds a unique suffix",
                 type="string",
                 required=True,
                 default="purplestrike_domain",

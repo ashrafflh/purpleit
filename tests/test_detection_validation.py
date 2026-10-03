@@ -14,6 +14,66 @@ from purplestrike.validation.engine import DetectionValidationEngine
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize(("rule_id", "event_id"), [
+    ("92657", None), ("60106", None), ("60137", None), ("67028", None),
+    ("custom-logon", "4624"), ("custom-logoff", 4634),
+    ("custom-logoff", "4647"), ("custom-privileges", "4672"),
+])
+async def test_routine_auth_never_counts_even_with_expected_rule_and_mitre(rule_id, event_id):
+    alert = SIEMAlert(
+        alert_id="routine", timestamp=datetime.now(UTC), rule_id=rule_id,
+        mitre_technique_ids=["T1078.002"],
+        raw_log={"data": {"win": {"system": {"eventID": event_id}}}},
+    )
+    registry = Mock()
+    engine = DetectionValidationEngine(FakeSIEMConnector([alert], []), registry)
+    result = await engine.validate_step(
+        "T1078.002", [rule_id], "host", alert.timestamp, alert.timestamp,
+    )
+    assert result.status == DetectionStatus.NOT_DETECTED
+    assert result.matched_rules == result.matched_alerts == result.candidate_alerts == []
+    assert result.excluded_alerts == [alert]
+    assert engine._rule_based_check([alert], [rule_id], "T1078.002") == ([], [])
+    registry.get_llm_provider.assert_not_called()
+
+
+async def test_failed_logon_and_technique_alerts_remain_eligible(powershell_alert):
+    failed = SIEMAlert(
+        alert_id="failed", timestamp=powershell_alert.timestamp, rule_id="60122",
+        mitre_technique_ids=["T1110.001"],
+        raw_log={"data": {"win": {"system": {"eventID": "4625"}}}},
+    )
+    routine = failed.model_copy(update={"alert_id": "routine", "rule_id": "92657"})
+    engine = DetectionValidationEngine(FakeSIEMConnector([routine, failed, powershell_alert], []))
+    for technique, expected in (("T1110.001", failed), ("T1059.001", powershell_alert)):
+        result = await engine.validate_step(
+            technique, [], "host", failed.timestamp, failed.timestamp,
+        )
+        assert result.status == DetectionStatus.DETECTED
+        assert result.matched_alerts == [expected]
+        assert routine not in result.candidate_alerts
+        assert result.excluded_alerts == [routine]
+
+
+async def test_ai_cannot_see_or_cite_excluded_logon():
+    routine = SIEMAlert(alert_id="excluded-logon", timestamp=datetime.now(UTC), rule_id="92657")
+    candidate = routine.model_copy(update={"alert_id": "candidate", "rule_id": "unmapped"})
+    provider = Mock(spec=LLMProvider)
+    provider.complete = AsyncMock(return_value=(
+        '{"detection_status":"detected","confidence":1,"matched_alerts":["excluded-logon"]}'
+    ))
+    registry = Mock()
+    registry.get_llm_provider.return_value = provider
+    engine = DetectionValidationEngine(FakeSIEMConnector([], []), registry)
+    result = await engine._ai_correlate(
+        "T1078", "host", routine.timestamp, routine.timestamp, [routine, candidate],
+    )
+    assert "excluded-logon" not in provider.complete.call_args.args[0][1]["content"]
+    assert result.status == DetectionStatus.UNKNOWN
+    assert result.matched_alerts == []
+    assert result.excluded_alerts == [routine]
+
+
 class FakeSIEMConnector:
     def __init__(self, alerts: list[SIEMAlert], rules: list[SIEMRule]) -> None:
         self.alerts = alerts
@@ -193,7 +253,7 @@ async def test_persistence_task_matches_real_mitre_id() -> None:
     alert = SIEMAlert(
         alert_id="task",
         timestamp=datetime.now(UTC),
-        rule_id="92657",
+        rule_id="task-rule",
         mitre_technique_ids=["T1053.005"],
     )
     connector = FakeSIEMConnector([alert], [])
@@ -247,7 +307,7 @@ async def test_saved_candidate_alerts_redact_configured_credentials(powershell_a
     powershell_alert.raw_log["message"] = "LDAP credential: private-password"
     engine = DetectionValidationEngine(FakeSIEMConnector([powershell_alert], []), config=config)
     result = await engine.validate_step(
-        "T1059.001", [], "host", datetime.now(UTC), datetime.now(UTC)
+        "T1059.001", [], "host", powershell_alert.timestamp, powershell_alert.timestamp
     )
     assert result.status == DetectionStatus.DETECTED
     assert "private-password" not in result.model_dump_json()
@@ -304,8 +364,8 @@ async def test_validation_matches_runtime_wazuh_rule_for_technique() -> None:
         technique_id="T1003.001",
         expected_rules=["100407"],
         target="10.10.1.108",
-        start_time=datetime.now(UTC),
-        end_time=datetime.now(UTC),
+        start_time=alert.timestamp,
+        end_time=alert.timestamp,
     )
 
     assert connector.rules_technique == "T1003.001"
@@ -314,6 +374,35 @@ async def test_validation_matches_runtime_wazuh_rule_for_technique() -> None:
     assert result.confidence == 1.0
     assert result.matched_rules == ["92900"]
     assert result.matched_alerts == [alert]
+
+
+@pytest.mark.parametrize("source_time", [None, "invalid", 123])
+async def test_out_of_window_alert_without_valid_source_time_is_excluded(source_time):
+    start = datetime.now(UTC)
+    alert = SIEMAlert(
+        alert_id="old", timestamp=start - timedelta(seconds=1), rule_id="91815",
+        raw_log={"data": {"win": {"system": {"systemTime": source_time}}}},
+    )
+    result = await DetectionValidationEngine(FakeSIEMConnector([alert], [])).validate_step(
+        "T1059.001", [], "host", start, start + timedelta(seconds=5)
+    )
+    assert result.status == DetectionStatus.NOT_DETECTED
+    assert result.matched_alerts == []
+
+
+async def test_delayed_prior_event_is_excluded_even_when_ingestion_is_in_window():
+    start = datetime.now(UTC)
+    alert = SIEMAlert(
+        alert_id="delayed-cleanup", timestamp=start + timedelta(seconds=1), rule_id="91815",
+        raw_log={"data": {"win": {"system": {
+            "systemTime": (start - timedelta(seconds=5)).isoformat(),
+        }}}},
+    )
+    result = await DetectionValidationEngine(FakeSIEMConnector([alert], [])).validate_step(
+        "T1059.001", [], "host", start, start + timedelta(seconds=5)
+    )
+    assert result.status == DetectionStatus.NOT_DETECTED
+    assert result.matched_alerts == []
 
 
 async def test_validation_matches_alert_mitre_even_without_expected_rule() -> None:
@@ -330,8 +419,8 @@ async def test_validation_matches_alert_mitre_even_without_expected_rule() -> No
         technique_id="T1003.001",
         expected_rules=[],
         target="10.10.1.108",
-        start_time=datetime.now(UTC),
-        end_time=datetime.now(UTC),
+        start_time=alert.timestamp,
+        end_time=alert.timestamp,
     )
 
     assert result.status == DetectionStatus.DETECTED
@@ -379,8 +468,8 @@ async def test_ai_failure_with_alerts_returns_unknown_and_preserves_alerts() -> 
         technique_id="T1003.001",
         expected_rules=["100407"],
         target="10.10.1.108",
-        start_time=datetime.now(UTC),
-        end_time=datetime.now(UTC),
+        start_time=alert.timestamp,
+        end_time=alert.timestamp,
     )
 
     assert result.status == DetectionStatus.UNKNOWN
@@ -458,8 +547,8 @@ async def test_ai_correlation_uses_configured_deepseek_provider() -> None:
         technique_id="T1003.001",
         expected_rules=[],
         target="10.10.1.108",
-        start_time=datetime.now(UTC),
-        end_time=datetime.now(UTC),
+        start_time=alert.timestamp,
+        end_time=alert.timestamp,
     )
 
     assert result.status == DetectionStatus.DETECTED

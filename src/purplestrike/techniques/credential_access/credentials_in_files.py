@@ -26,20 +26,21 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             ps_cmd = (
                 f"$paths = @({path_filter}); "
                 f"$patterns = @({pattern_filter}); "
-                "$results = @(); "
+                "$results = @(); $scanned = 0; "
                 "foreach ($path in $paths) { "
                 "if (Test-Path $path) { "
                 "foreach ($pattern in $patterns) { "
-                "$files = Get-ChildItem -Path $path -Filter $pattern -Recurse "
+                "$files = Get-ChildItem -Path $path -Filter $pattern -File -Recurse "
                 "-ErrorAction SilentlyContinue -Depth 3; "
-                "foreach ($file in $files) { "
+                "foreach ($file in $files) { $scanned++; "
                 "$matches = Select-String -Path $file.FullName "
                 '-Pattern "password=|pwd=|Password|connectionString|credential" '
                 "-ErrorAction SilentlyContinue; "
                 "foreach ($m in $matches) { "
                 '$results += "File: $($file.FullName) | Line: $($m.LineNumber)" '
                 "} } } } }; "
-                '"Total files scanned: " + $results.Count; $results'
+                '"Total files scanned: " + $scanned; '
+                '"Matching lines: " + $results.Count; $results'
             )
             result = await conn.run_ps(ps_cmd)
         else:

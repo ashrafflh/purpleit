@@ -169,7 +169,7 @@ EXECUTION_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="service_name",
-                description="Service name to create/modify",
+                description="Service name prefix; execution adds a unique suffix",
                 type="string",
                 required=True,
                 default="PurpleStrikeSvc",
@@ -236,7 +236,7 @@ EXECUTION_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="task_name",
-                description="Scheduled task name",
+                description="Scheduled task name prefix; execution adds a unique suffix",
                 type="string",
                 required=True,
                 default="PurpleStrikeTask",

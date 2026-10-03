@@ -27,7 +27,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 error="target_account parameter is required",
                 execution_status=ExecutionStatus.FAILURE,
             )
-        password_list = parameters.get("password_list", "common_passwords.txt")
+        password_list = parameters.get("password_list", "PurpleStrikeInvalid123!")
         max_attempts = parameters.get("max_attempts", 5)
         passwords = password_list.split(",")
         passwords = passwords[:max_attempts]

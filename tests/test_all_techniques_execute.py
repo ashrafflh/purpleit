@@ -31,6 +31,8 @@ class FakeConnection:
 
     async def run_ps(self, script: str, timeout: int = 60) -> CommandResult:
         self.scripts.append(script)
+        if "WMI trigger cleanup complete" in script:
+            return CommandResult(stdout="PurpleStrike-T1546.003\n", stderr="", exit_code=0)
         if "Test-Path" in script:
             return CommandResult(stdout="True\n", stderr="", exit_code=0)
         if "Get-Content" in script:

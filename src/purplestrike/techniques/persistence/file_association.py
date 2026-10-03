@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from uuid import uuid4
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.scripts import delete_temp_files, ps_quote
 
 logger = logging.getLogger(__name__)
-_created_targets: set[str] = set()
+_created_resources: dict[tuple[str, str], str] = {}
+
+
+def _files(token: str) -> tuple[str, str, str]:
+    return (
+        f"purplestrike_test_{token}.purplestrike_{token}",
+        f"purplestrike_assoc_marker_{token}.txt",
+        f"purplestrike_assoc_handler_{token}.vbs",
+    )
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
@@ -15,23 +25,26 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
+        token = uuid4().hex
+        run_id = parameters.get("_run_id") or token
+        test_file, marker, handler = _files(token)
         result = await conn.run_ps(
             "$ErrorActionPreference = 'Stop'; "
-            "$extension = 'HKCU:\\Software\\Classes\\.purplestrike'; "
-            "$class = 'HKCU:\\Software\\Classes\\PurpleStrikeFile'; "
+            f"$extension = 'HKCU:\\Software\\Classes\\.purplestrike_{token}'; "
+            f"$class = 'HKCU:\\Software\\Classes\\PurpleStrikeFile_{token}'; "
             "if ((Test-Path -LiteralPath $extension) -or (Test-Path -LiteralPath $class)) { "
             "throw 'Existing PurpleStrike test association will not be overwritten' }; "
+            "Write-Output 'PurpleStrike-association-resources-owned'; "
             "New-Item -Path $extension -Force | Out-Null; "
-            "Set-Item -LiteralPath $extension -Value 'PurpleStrikeFile'; "
+            f"Set-Item -LiteralPath $extension -Value 'PurpleStrikeFile_{token}'; "
             "$commandKey = Join-Path $class 'shell\\open\\command'; "
             "New-Item -Path $commandKey -Force | Out-Null; "
-            "$handler = Join-Path $env:TEMP 'purplestrike_assoc_handler.vbs'; "
-            "$testFile = Join-Path $env:TEMP 'purplestrike_test.purplestrike'; "
-            "$marker = Join-Path $env:TEMP 'purplestrike_assoc_marker.txt'; "
-            "[IO.File]::Delete($marker); "
+            f"$handler = Join-Path $env:TEMP {ps_quote(handler)}; "
+            f"$testFile = Join-Path $env:TEMP {ps_quote(test_file)}; "
+            f"$marker = Join-Path $env:TEMP {ps_quote(marker)}; "
             "$vbs = @("
             "'Set shell = CreateObject(\"WScript.Shell\")',"
-            "'marker = shell.ExpandEnvironmentStrings(\"%TEMP%\\purplestrike_assoc_marker.txt\")',"
+            f"'marker = shell.ExpandEnvironmentStrings(\"%TEMP%\\{marker}\")',"
             "'Set stream = CreateObject(\"Scripting.FileSystemObject\")"
             ".CreateTextFile(marker, True)',"
             "'stream.WriteLine \"PurpleStrike-T1546.001\"',"
@@ -40,8 +53,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "$wscript = Join-Path $env:SystemRoot 'System32\\wscript.exe'; "
             "$payload = '\"' + $wscript + '\" //B //NoLogo \"' + "
             "$handler + '\" \"%1\"'; "
-            "(Get-Item -LiteralPath $commandKey).SetValue('', $payload, "
-            "[Microsoft.Win32.RegistryValueKind]::String); "
+            "Set-Item -LiteralPath $commandKey -Value $payload -ErrorAction Stop; "
             "[IO.File]::WriteAllText($testFile, 'PurpleStrike association test'); "
             "if (-not ('PurpleStrike.ShellNative' -as [type])) { "
             "Add-Type -Namespace PurpleStrike -Name ShellNative -MemberDefinition '"
@@ -62,20 +74,20 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "throw 'Registered file-association handler did not produce its marker' }; "
             "Get-Content -LiteralPath $marker -ErrorAction Stop"
         )
-        if result.success:
-            _created_targets.add(target)
+        if result.success or "PurpleStrike-association-resources-owned" in result.stdout:
+            _created_resources[(target, run_id)] = token
         return TechniqueResult(
             technique_id="T1546.001",
             success=result.success,
             output=result.stdout[:4096],
             error=result.stderr[:1024] if not result.success else None,
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
-            artifacts=[
-                "%TEMP%\\purplestrike_test.purplestrike",
-                "%TEMP%\\purplestrike_assoc_marker.txt",
-                "%TEMP%\\purplestrike_assoc_handler.vbs",
+            artifacts=[f"%TEMP%\\{name}" for name in _files(token)] + [
+                f"HKCU:\\Software\\Classes\\.purplestrike_{token}",
+                f"HKCU:\\Software\\Classes\\PurpleStrikeFile_{token}",
             ],
-            evidence=["Opening the isolated extension invoked its registered handler."],
+            evidence=["Opening the isolated extension invoked its registered handler."]
+            if result.success else [],
         )
     except Exception as e:
         logger.error(f"T1546.001 execution failed: {e}")
@@ -90,26 +102,27 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             await conn.disconnect()
 
 
-async def cleanup(target: str) -> None:
+async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
-        if target not in _created_targets:
+        run_id = (parameters or {}).get("_run_id")
+        owned = [(key, token) for key, token in _created_resources.items()
+                 if key[0] == target and (run_id is None or key[1] == run_id)]
+        if not owned:
             return
         conn = await get_connection(target)
-        cleanup_cmd = (
-            "Remove-Item -LiteralPath 'HKCU:\\Software\\Classes\\.purplestrike', "
-            "'HKCU:\\Software\\Classes\\PurpleStrikeFile' -Recurse -Force "
-            "-ErrorAction SilentlyContinue; "
-            "Remove-Item -LiteralPath (Join-Path $env:TEMP "
-            "'purplestrike_test.purplestrike'), (Join-Path $env:TEMP "
-            "'purplestrike_assoc_marker.txt'), (Join-Path $env:TEMP "
-            "'purplestrike_assoc_handler.vbs') -Force -ErrorAction SilentlyContinue"
-        )
-        removed = await conn.run_ps(cleanup_cmd)
-        if not removed.success:
-            raise RuntimeError(removed.stderr or removed.stdout or "Association cleanup failed")
-        _created_targets.discard(target)
+        for key, token in owned:
+            cleanup_cmd = (
+                f"Remove-Item -LiteralPath 'HKCU:\\Software\\Classes\\.purplestrike_{token}', "
+                f"'HKCU:\\Software\\Classes\\PurpleStrikeFile_{token}' -Recurse -Force "
+                "-ErrorAction SilentlyContinue; "
+                + delete_temp_files(*_files(token))
+            )
+            removed = await conn.run_ps(cleanup_cmd)
+            if not removed.success:
+                raise RuntimeError(removed.stderr or removed.stdout or "Association cleanup failed")
+            del _created_resources[key]
     except Exception as e:
         logger.warning(f"T1546.001 cleanup failed: {e}")
     finally:

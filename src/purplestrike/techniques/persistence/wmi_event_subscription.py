@@ -45,16 +45,25 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 "$ErrorActionPreference = 'Stop'; "
                 "$marker = 'C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt'; "
                 "[IO.File]::Delete($marker); "
-                "$process = Start-Process -FilePath 'notepad.exe' -PassThru; "
-                "try { for ($i=0; $i -lt 20 -and !(Test-Path -LiteralPath $marker); $i++) "
-                "{ Start-Sleep -Milliseconds 250 }; "
-                "Get-Content -LiteralPath $marker -ErrorAction Stop } finally { "
-                "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }"
+                "$process = Start-Process -FilePath 'notepad.exe' -WindowStyle Hidden -PassThru; "
+                "try { $content = ''; for ($i=0; $i -lt 40; $i++) { "
+                "if (Test-Path -LiteralPath $marker) { "
+                "$content = Get-Content -LiteralPath $marker -Raw -ErrorAction Stop; "
+                "if ($content -match 'PurpleStrike-T1546.003') { break } }; "
+                "Start-Sleep -Milliseconds 250 }; "
+                "if ($content -notmatch 'PurpleStrike-T1546.003') { "
+                "throw 'WMI consumer did not write the expected marker' }; "
+                "Write-Output $content } finally { "
+                "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue; "
+                "Write-Output 'WMI trigger cleanup complete' }"
             )
             result.stdout += triggered.stdout
             result.stderr += triggered.stderr
-            result.exit_code = triggered.exit_code
-            result.success = triggered.success
+            marker_seen = "PurpleStrike-T1546.003" in triggered.stdout
+            result.success = triggered.success and marker_seen
+            result.exit_code = triggered.exit_code if not triggered.success else int(not marker_seen)
+            if triggered.success and not marker_seen:
+                result.stderr += "WMI trigger did not return its expected marker"
         return TechniqueResult(
             technique_id="T1546.003",
             success=result.success,
@@ -62,7 +71,10 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             error=result.stderr[:1024] if not result.success else None,
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
             artifacts=["C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt"],
-            evidence=["The permanent WMI subscription executed after a process-start event."],
+            evidence=(
+                ["The permanent WMI subscription executed after a process-start event."]
+                if result.success else []
+            ),
         )
     except Exception as e:
         logger.error(f"T1546.003 execution failed: {e}")

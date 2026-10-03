@@ -40,7 +40,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             )
         _created_services.add((target, service_name))
         verify = await conn.run_ps(
-            f"Get-Service -Name '{service_name}' | Format-List Name,Status,StartType"
+            f"Get-Service -Name {ps_quote(service_name)} | Format-List Name,Status,StartType"
         )
         if not verify.success:
             return TechniqueResult(

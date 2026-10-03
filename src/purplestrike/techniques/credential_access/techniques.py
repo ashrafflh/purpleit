@@ -95,9 +95,9 @@ CREDENTIAL_ACCESS_TECHNIQUES = [
             ),
             TechniqueParameter(
                 name="password_list",
-                description="Path to password list",
+                description="Comma-separated candidate passwords (bounded by max_attempts)",
                 type="string",
-                default="common_passwords.txt",
+                default="PurpleStrikeInvalid123!",
             ),
             TechniqueParameter(
                 name="max_attempts",
@@ -133,7 +133,7 @@ CREDENTIAL_ACCESS_TECHNIQUES = [
             ),
             TechniqueParameter(
                 name="account_list",
-                description="Path to account list",
+                description="Comma-separated account names",
                 type="string",
                 required=True,
                 default="Administrator",

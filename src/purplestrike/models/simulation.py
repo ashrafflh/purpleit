@@ -75,6 +75,7 @@ class DetectionResult(BaseModel):
     matched_rules: list[str] = Field(default_factory=list)
     matched_alerts: list[SIEMAlert] = Field(default_factory=list)
     candidate_alerts: list[SIEMAlert] = Field(default_factory=list)
+    excluded_alerts: list[SIEMAlert] = Field(default_factory=list)
     ai_correlation_reasoning: str | None = None
     risk: RiskResult = Field(default_factory=RiskResult)
     coverage_status: CoverageStatus = CoverageStatus.NOT_ASSESSED

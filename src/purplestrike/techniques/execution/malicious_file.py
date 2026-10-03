@@ -25,7 +25,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "$fileContent = 'echo off' + [Environment]::NewLine + "
             "'echo PurpleStrike-T1204.002>%TEMP%\\purplestrike_user_execution.txt'; "
             "Set-Content -LiteralPath $filePath -Value $fileContent -Encoding ASCII; "
-            "$process = Start-Process -FilePath $filePath -PassThru -Wait; "
+            "$process = Start-Process -FilePath $filePath -WindowStyle Hidden -PassThru -Wait; "
             "if ($process.ExitCode -ne 0) { throw ('File exited with ' + $process.ExitCode) }; "
             "Get-Content -LiteralPath $markerPath -ErrorAction Stop"
         )

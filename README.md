@@ -641,6 +641,10 @@ Returns `DetectionResult` with activity status (`detected` / `partially_detected
 
 The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Queries allow a two-second clock margin (`siem.extra.clock_skew_seconds`), checking Windows event timestamps at the boundary to avoid including earlier cleanup events. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches. Coverage assessment is performed after execution using the scenario's evidence mode, independently of whether the generated activity produced an alert.
 
+Routine Windows authentication events (4624, 4634, 4647, 4672) and Wazuh rules 92657, 60106, 60137, and 67028 are excluded before rule matching and AI correlation, regardless of their MITRE tags or expected-rule mappings. They remain in `DetectionResult.excluded_alerts` for audit. Successful transport authentication alone never confirms technique detection; failed-logon and account-change events remain eligible.
+
+The custom Python executor treats service, scheduled-task, Run-value, and account-creation names as prefixes and allocates a unique suffix for every execution, including saved-plan replays. Allocated names appear in result artifacts and are retained in memory for cleanup. Account names are shortened to the Windows 20-character limit. File associations and task output files also use unique names. Cleanup removes resources owned by the current executor; a restarted process does not claim earlier resources. Fixed system keys retain their conflict checks and backup/restore behavior. Permissions, unavailable prerequisites, interrupted cleanup, and occupied fixed keys can still prevent successful execution.
+
 #### Risk Quantifier (`risk/quantifier.py`)
 
 FAIR-inspired financial risk model:
@@ -807,7 +811,7 @@ All tool configuration lives in `pyproject.toml`:
 - **No data exfiltration** — Data access is simulated, not real
 - **No data destruction** — Destructive techniques are dry-run only
 - **No denial of service** — Brute-force is rate-limited
-- **Automatic cleanup** — All artifacts, scheduled tasks, and implants are removed post-run
+- **Automatic cleanup** — Owned test resources are cleaned up post-run; review cleanup errors and host state after interrupted runs
 - **Emergency stop** — `Ctrl+C` for graceful shutdown, double-tap for immediate abort
 
 ---

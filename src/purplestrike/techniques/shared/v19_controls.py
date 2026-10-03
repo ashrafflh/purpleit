@@ -5,6 +5,7 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import command_error, get_connection
+from purplestrike.techniques.scripts import delete_temp_files
 
 logger = logging.getLogger(__name__)
 
@@ -273,32 +274,33 @@ async def cleanup(target: str, parameters: dict[str, Any] | None = None) -> None
     """Remove only artifacts and firewall rules created by this executor."""
     conn = None
     try:
+        technique_id = str((parameters or {}).get("_technique_id", ""))
+        if technique_id not in {*_WINDOWS_ARTIFACTS, *_LINUX_ARTIFACTS, "T1027.018", "T1686.003"}:
+            return
         conn = await get_connection(target)
         if conn.is_windows:
-            command = (
-                "$i=[char]0x2063; "
-                "$paths=@("
-                "(Join-Path $env:TEMP ('purple'+$i+'strike.ps1')) ,"
-                "(Join-Path $env:TEMP 'purplestrike_social_engineering.txt') ,"
-                "(Join-Path $env:TEMP 'purplestrike_impersonation.txt') ,"
-                "(Join-Path $env:TEMP 'purplestrike_spoofed_message.eml') ,"
-                "(Join-Path $env:TEMP 'purplestrike_security_status.html')); "
-                "foreach($p in $paths){ Remove-Item -LiteralPath $p -Force "
-                "-ErrorAction SilentlyContinue }; "
-                "Remove-NetFirewallRule -DisplayName 'PurpleStrike T1686.003' "
-                "-ErrorAction SilentlyContinue"
-            )
+            if technique_id == "T1027.018":
+                command = (
+                    "[IO.File]::Delete((Join-Path $env:TEMP "
+                    "('purple'+[char]0x2063+'strike.ps1')))"
+                )
+            elif technique_id == "T1686.003":
+                command = (
+                    "Remove-NetFirewallRule -DisplayName 'PurpleStrike T1686.003' "
+                    "-ErrorAction SilentlyContinue"
+                )
+            elif technique_id in _WINDOWS_ARTIFACTS:
+                command = delete_temp_files(_WINDOWS_ARTIFACTS[technique_id].split("\\")[-1])
+            else:
+                return
             result = await conn.run_ps(command)
         else:
-            command = (
-                "unicode_name=\"/tmp/purple$(printf '\\342\\201\\243')strike.sh\"; "
-                "rm -f -- \"$unicode_name\" "
-                "/tmp/purplestrike_social_engineering.txt "
-                "/tmp/purplestrike_impersonation.txt "
-                "/tmp/purplestrike_spoofed_message.eml "
-                "/tmp/purplestrike_security_status.html "
-                "/tmp/purplestrike_system.log"
-            )
+            if technique_id == "T1027.018":
+                command = "rm -f -- \"/tmp/purple$(printf '\\342\\201\\243')strike.sh\""
+            elif technique_id in _LINUX_ARTIFACTS:
+                command = f"rm -f -- '{_LINUX_ARTIFACTS[technique_id]}'"
+            else:
+                return
             result = await conn.run_command(command)
         if not result.success:
             raise RuntimeError(command_error(result, "v19 scenario cleanup failed"))

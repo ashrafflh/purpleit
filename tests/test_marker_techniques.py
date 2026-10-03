@@ -51,8 +51,8 @@ async def test_file_association_uses_native_shell_execute_and_vbs_marker(
     setup = connection.scripts[0]
     assert "ShellExecute" in setup
     assert "SHChangeNotify" in setup
-    assert "purplestrike_assoc_handler.vbs" in setup
-    assert ".SetValue('', $payload" in setup
+    assert "purplestrike_assoc_handler_" in setup
+    assert "Set-Item -LiteralPath $commandKey -Value $payload" in setup
     assert "-lt 60" in setup
 
 
@@ -83,9 +83,9 @@ async def test_fodhelper_sets_real_default_value_and_runs_vbs_marker(
     await bypass_uac.cleanup("uac-host")
 
     assert result.success
-    setup, trigger = connection.scripts[:2]
+    setup, trigger = connection.scripts[1:3]
     assert "purplestrike_uac_handler.vbs" in setup
-    assert ".SetValue('', $payload" in setup
+    assert "Set-Item -LiteralPath $key -Value $payload" in setup
     assert "-Name '(Default)'" not in setup
     assert "fodhelper.exe" in trigger
     assert "computerdefaults.exe" in trigger

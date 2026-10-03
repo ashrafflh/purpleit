@@ -16,10 +16,10 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         conn = await get_connection(target)
         if conn.is_windows:
             result = await conn.run_ps(
-                "net user Guest 2>&1; Write-Output '---'; "
-                "net user Administrator 2>&1; Write-Output '---'; "
-                "net user DefaultAccount 2>&1; Write-Output '---'; "
-                "Get-LocalUser | Select-Object Name,Enabled,Description | Format-Table -AutoSize"
+                "Get-LocalUser -ErrorAction Stop | "
+                "Where-Object { $_.SID.Value -match '-(500|501|503)$' } | "
+                "Select-Object Name,SID,Enabled,PasswordRequired,Description | "
+                "Format-Table -AutoSize"
             )
         else:
             result = await conn.run_command(

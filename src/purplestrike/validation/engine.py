@@ -71,8 +71,12 @@ class DetectionValidationEngine:
             alert.model_copy(update={"raw_log": self._redact_event(alert.raw_log)})
             for alert in alerts
         ]
+        alerts, excluded = self._detection_candidates(alerts)
         if not alerts:
-            return DetectionResult(status=DetectionStatus.NOT_DETECTED, confidence=0.0)
+            return DetectionResult(
+                status=DetectionStatus.NOT_DETECTED, confidence=0.0,
+                excluded_alerts=excluded,
+            )
 
         matched_rules, matched_alerts = self._rule_based_check(
             alerts,
@@ -89,6 +93,7 @@ class DetectionValidationEngine:
                 matched_rules=matched_rules,
                 matched_alerts=matched_alerts,
                 candidate_alerts=alerts,
+                excluded_alerts=excluded,
             )
 
         result = await self._ai_correlate(
@@ -100,23 +105,46 @@ class DetectionValidationEngine:
             command=command,
             execution_output=execution_output,
         )
+        result.excluded_alerts.extend(excluded)
         return result
 
     @staticmethod
-    def _within_event_window(alert: SIEMAlert, start: datetime, end: datetime) -> bool:
-        if start <= alert.timestamp <= end:
+    def _is_routine_auth_event(alert: SIEMAlert) -> bool:
+        """Transport logons are not evidence that the executed technique was detected.
+
+        Apply this before both rule/MITRE matching and AI correlation, even when
+        an installed rule labels a routine NTLM logon as possible pass-the-hash.
+        Failed logons and account changes remain eligible for correlation.
+        """
+        if str(alert.rule_id) in {"92657", "60106", "60137", "67028"}:
             return True
-        # Manager clocks may lag sub-second Windows events. For the padded
-        # boundary, use the source timestamp to exclude a preceding step's cleanup.
+        data = alert.raw_log.get("data") or {}
+        win = data.get("win") or {}
+        system = win.get("system") or {}
+        event_id = system.get("eventID", alert.raw_log.get("data.win.system.eventID"))
+        return str(event_id) in {"4624", "4634", "4647", "4672"}
+
+    def _detection_candidates(
+        self, alerts: list[SIEMAlert],
+    ) -> tuple[list[SIEMAlert], list[SIEMAlert]]:
+        candidates, excluded = [], []
+        for alert in alerts:
+            (excluded if self._is_routine_auth_event(alert) else candidates).append(alert)
+        return candidates, excluded
+
+    @staticmethod
+    def _within_event_window(alert: SIEMAlert, start: datetime, end: datetime) -> bool:
+        # Prefer occurrence time over manager ingestion time: delayed events
+        # from an earlier step must not be credited to the current technique.
         event_time = (
             alert.raw_log.get("data", {}).get("win", {}).get("system", {}).get("systemTime")
         )
         if event_time:
             try:
                 return start <= datetime.fromisoformat(event_time.replace("Z", "+00:00")) <= end
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, AttributeError):
                 pass
-        return True
+        return start <= alert.timestamp <= end
 
     async def _expected_rules_for_technique(
         self,
@@ -155,6 +183,8 @@ class DetectionValidationEngine:
         expected_rule_set = {str(rule_id) for rule_id in expected_rules}
 
         for alert in alerts:
+            if self._is_routine_auth_event(alert):
+                continue
             if str(alert.rule_id) in expected_rule_set or self._alert_matches_technique(
                 alert,
                 technique_id,
@@ -168,6 +198,8 @@ class DetectionValidationEngine:
     def _alert_matches_technique(self, alert: SIEMAlert, technique_id: str) -> bool:
         from purplestrike.techniques.registry import technique_registry
 
+        if self._is_routine_auth_event(alert):
+            return False
         technique = technique_registry.get_technique(technique_id)
         if technique:
             technique_id = technique.detection_technique_id
@@ -180,6 +212,28 @@ class DetectionValidationEngine:
         return any(self._alert_matches_technique(alert, technique_id) for alert in alerts)
 
     async def _ai_correlate(
+        self,
+        technique_id: str,
+        target: str,
+        start_time: datetime,
+        end_time: datetime,
+        alerts: list[SIEMAlert],
+        command: str | None = None,
+        execution_output: str = "",
+    ) -> DetectionResult:
+        alerts, excluded = self._detection_candidates(alerts)
+        if not alerts:
+            return DetectionResult(
+                status=DetectionStatus.NOT_DETECTED, confidence=0.0,
+                excluded_alerts=excluded,
+            )
+        result = await self._ai_correlate_candidates(
+            technique_id, target, start_time, end_time, alerts, command, execution_output,
+        )
+        result.excluded_alerts.extend(excluded)
+        return result
+
+    async def _ai_correlate_candidates(
         self,
         technique_id: str,
         target: str,

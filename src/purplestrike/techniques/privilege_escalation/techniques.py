@@ -79,7 +79,7 @@ PRIV_ESC_TECHNIQUES = [
         parameters=[
             TechniqueParameter(
                 name="service_name",
-                description="Service name",
+                description="Service name prefix; execution adds a unique suffix",
                 type="string",
                 required=True,
                 default="PurpleStrikePrivEscSvc",

@@ -21,20 +21,25 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         max_keys = max(1, min(int(parameters.get("max_keys", 500)), 5000))
         ps_cmd = (
             f"$regPaths = @({path_filter}); "
-            "$results = @(); "
-            "foreach ($regPath in $regPaths) { "
-            "try { "
-            f"$subkeys = Get-ChildItem -LiteralPath $regPath -Recurse -Depth {max_depth} "
-            f"-ErrorAction SilentlyContinue | Select-Object -First {max_keys}; "
-            "foreach ($subkey in $subkeys) { "
-            "try { "
-            "$props = Get-ItemProperty -Path $subkey.PSPath -ErrorAction SilentlyContinue; "
-            "$credProps = $props.PSObject.Properties | Where-Object { "
-            "$_.Name -match 'Password|PWD|Credential|SecureString|Pass|Key|Secret|Token' "
-            '}; '
-            "foreach ($cp in $credProps) { "
-            '$results += "Key: $($subkey.PSPath) | Name: $($cp.Name)" '
-            "} } catch { } } } catch { } }; "
+            f"$maxKeys = {max_keys}; $maxDepth = {max_depth}; "
+            "$results = @(); $visited = 0; $unreadable = 0; $limited = $false; "
+            "$queue = [Collections.Generic.Queue[object]]::new(); "
+            "foreach ($path in $regPaths) { $queue.Enqueue(@{Path=$path;Depth=0}) }; "
+            "$watch = [Diagnostics.Stopwatch]::StartNew(); "
+            "while ($queue.Count -gt 0 -and $visited -lt $maxKeys "
+            "-and $watch.Elapsed.TotalSeconds -lt 40) { "
+            "$node = $queue.Dequeue(); $key = $null; $visited++; "
+            "try { $key = Get-Item -LiteralPath $node.Path -ErrorAction Stop; "
+            "foreach ($name in $key.GetValueNames()) { "
+            "if ($name -match 'Password|PWD|Credential|SecureString|Pass|Key|Secret|Token') { "
+            '$results += "Key: $($node.Path) | Name: $name" } }; '
+            "if ($node.Depth -lt $maxDepth) { foreach ($child in $key.GetSubKeyNames()) { "
+            "if ($visited + $queue.Count -ge $maxKeys) { $limited = $true; break }; "
+            "$queue.Enqueue(@{Path=($node.Path + '\\' + $child);Depth=($node.Depth + 1)}) "
+            "} } } catch { $unreadable++ } finally { if ($key) { $key.Close() } } }; "
+            '"Registry keys inspected: " + $visited; '
+            '"Unreadable keys: " + $unreadable; '
+            '"Scan limit reached: " + ($limited -or $queue.Count -gt 0); '
             '"Credential-related registry entries found: " + $results.Count; $results'
         )
         result = await conn.run_ps(ps_cmd)
