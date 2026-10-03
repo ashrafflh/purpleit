@@ -5,6 +5,7 @@ import typer
 from rich.console import Console
 
 import purplestrike
+from purplestrike.logging_config import configure_logging
 
 load_dotenv()
 
@@ -16,6 +17,12 @@ app = typer.Typer(
 )
 
 console = Console()
+
+
+@app.callback()
+def initialize_logging() -> None:
+    """Initialize local persistent logging for every CLI command."""
+    configure_logging()
 
 
 @app.command()

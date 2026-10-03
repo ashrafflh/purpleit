@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import typer
 from rich.console import Console
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def run(
@@ -75,6 +77,20 @@ async def _run(
     config.detection_check_delay = detection_check_delay
     config.output_dir = output_dir
 
+    logger.info(
+        "Run requested: target_group=%s mode=%s all_techniques=%s max_steps=%s "
+        "detection_check_delay=%ss output_dir=%s report_format=%s skip_cleanup=%s dry_run=%s",
+        target_group,
+        mode,
+        all_techniques,
+        max_steps,
+        detection_check_delay,
+        output_dir,
+        format,
+        skip_cleanup,
+        dry_run,
+    )
+
     tactic_list = tactics.split(",") if tactics else None
     if all_techniques and techniques:
         console.print("\n[red]Use either --all-techniques or --techniques, not both.[/red]")
@@ -131,7 +147,9 @@ async def _run(
             console.print("\n[yellow]No simulation report generated (dry-run or aborted).[/yellow]")
 
     except KeyboardInterrupt:
+        logger.warning("Simulation interrupted by user")
         console.print("\n[yellow]Simulation interrupted. Generating partial report...[/yellow]")
     except Exception as e:
+        logger.exception("Simulation failed")
         console.print(f"\n[red]Simulation failed: {e}[/red]")
         raise typer.Exit(1)

@@ -78,7 +78,16 @@ class Orchestrator:
         if plan is None:
             return None
         plan = self._normalize_plan_targets(plan, target_group_name)
-        return self._filter_plan_for_target_os(plan)
+        plan = self._filter_plan_for_target_os(plan)
+        logger.info(
+            "Plan generated: name=%s mode=%s target_group=%s steps=%s techniques=%s",
+            plan.name,
+            mode,
+            plan.target_group,
+            len(plan.steps),
+            [step.technique_id for step in plan.steps],
+        )
+        return plan
 
     async def _generate_playbook_plan(
         self,
@@ -330,6 +339,16 @@ class Orchestrator:
         from purplestrike.techniques.registry import load_default_techniques
 
         load_default_techniques()
+        logger.info(
+            "Preparing simulation: mode=%s target_group=%s tactics=%s techniques=%s "
+            "skip_cleanup=%s dry_run=%s",
+            mode,
+            target_group_name,
+            tactics or [],
+            technique_ids or [],
+            skip_cleanup,
+            dry_run,
+        )
 
         plan = await self.generate_plan(
             mode=mode,
@@ -346,10 +365,12 @@ class Orchestrator:
         self._plan = plan
 
         if not self.display_plan(plan):
+            logger.warning("Plan rejected by user: name=%s", plan.name)
             console.print("[yellow]Plan rejected. Aborting.[/yellow]")
             return None
 
         if dry_run:
+            logger.info("Dry run complete; no techniques executed")
             console.print("[yellow]Dry-run mode — plan generated but not executed.[/yellow]")
             return None
 
@@ -370,16 +391,29 @@ class Orchestrator:
             plan_name=plan.name,
             status=SimulationStatus.COMPLETED,
         )
+        logger.info(
+            "Simulation started: simulation_id=%s plan=%s target_group=%s steps=%s "
+            "llm_provider=%s siem_connector=%s",
+            sim_id,
+            plan.name,
+            target_group_name,
+            len(plan.steps),
+            self.config.llm.provider.value,
+            self.config.siem.connector,
+        )
 
         siem_connector = plugin_registry.get_siem_connector(self.config.siem.connector)
         if siem_connector:
             try:
                 await siem_connector.setup(self.config.siem.model_dump())
+                logger.info("SIEM connector ready: %s", self.config.siem.connector)
             except Exception as e:
-                logger.error(f"Failed to connect to SIEM: {e}")
+                logger.exception("Failed to connect to SIEM: %s", e)
                 with suppress(Exception):
                     await siem_connector.teardown()
                 siem_connector = None
+        else:
+            logger.warning("SIEM connector unavailable: %s", self.config.siem.connector)
 
         sim_steps: list[SimulationStep] = []
         execution_target = self._target_for_group(target_group_name or plan.target_group)
@@ -392,6 +426,17 @@ class Orchestrator:
                 f"\n[*] Executing step {i}/{len(plan.steps)}: "
                 f"{plan_step.technique_id} {plan_step.technique_name}..."
             )
+            logger.info(
+                "Technique execution started: simulation_id=%s step=%s/%s technique_id=%s "
+                "technique_name=%s target=%s parameters=%s",
+                sim_id,
+                i,
+                len(plan.steps),
+                plan_step.technique_id,
+                plan_step.technique_name,
+                execution_target,
+                plan_step.parameters,
+            )
 
             step_start = datetime.now(UTC)
             technique_result = await self._execute_step(
@@ -400,6 +445,22 @@ class Orchestrator:
                 target=execution_target,
             )
             step_end = datetime.now(UTC)
+            logger.info(
+                "Technique execution finished: simulation_id=%s step=%s technique_id=%s "
+                "success=%s status=%s duration_seconds=%.3f output=%r error=%r "
+                "artifacts=%s evidence=%s emulation_mode=%s",
+                sim_id,
+                i,
+                plan_step.technique_id,
+                technique_result.success,
+                technique_result.execution_status,
+                technique_result.execution_time_seconds,
+                technique_result.output,
+                technique_result.error,
+                technique_result.artifacts,
+                technique_result.evidence,
+                technique_result.emulation_mode,
+            )
 
             exec_status = (
                 ExecutionStatus.SUCCESS if technique_result.success else ExecutionStatus.FAILURE
@@ -410,6 +471,13 @@ class Orchestrator:
             if siem_connector:
                 import asyncio
 
+                logger.info(
+                    "Detection validation scheduled: simulation_id=%s technique_id=%s "
+                    "delay_seconds=%s",
+                    sim_id,
+                    plan_step.technique_id,
+                    self.config.detection_check_delay,
+                )
                 await asyncio.sleep(self.config.detection_check_delay)
                 validation_end = datetime.now(UTC)
                 detection_result = await self._validate_detection(
@@ -426,6 +494,32 @@ class Orchestrator:
                 detection_result, technique_result.success
             )
             detection_result = self._assess_coverage(detection_result, technique_result)
+            logger.info(
+                "Detection validation finished: simulation_id=%s technique_id=%s "
+                "detection_status=%s confidence=%.3f matched_rules=%s matched_alert_ids=%s "
+                "candidate_alert_count=%s coverage_status=%s coverage_eligible=%s "
+                "coverage_reason=%r correlation_reasoning=%r",
+                sim_id,
+                plan_step.technique_id,
+                detection_result.status,
+                detection_result.confidence,
+                detection_result.matched_rules,
+                [alert.alert_id for alert in detection_result.matched_alerts],
+                len(detection_result.candidate_alerts),
+                detection_result.coverage_status,
+                detection_result.coverage_eligible,
+                detection_result.coverage_reason,
+                detection_result.ai_correlation_reasoning,
+            )
+            logger.debug(
+                "Detection evidence: simulation_id=%s technique_id=%s matched_alerts=%s "
+                "candidate_alerts=%s risk=%s",
+                sim_id,
+                plan_step.technique_id,
+                [alert.model_dump(mode="json") for alert in detection_result.matched_alerts],
+                [alert.model_dump(mode="json") for alert in detection_result.candidate_alerts],
+                detection_result.risk.model_dump(mode="json"),
+            )
             det_status = detection_result.status
             det_icon = {
                 "detected": "[green]DETECTED[/green]",
@@ -469,10 +563,18 @@ class Orchestrator:
             if not skip_cleanup:
                 cleanup_plan = plan.model_copy(update={"steps": [plan_step]})
                 await self._cleanup_all(cleanup_plan, plugin_registry, target=execution_target)
+            else:
+                logger.info(
+                    "Cleanup skipped: simulation_id=%s technique_id=%s target=%s",
+                    sim_id,
+                    plan_step.technique_id,
+                    execution_target,
+                )
 
         if siem_connector:
             with suppress(Exception):
                 await siem_connector.teardown()
+            logger.info("SIEM connector closed: %s", self.config.siem.connector)
 
         simulation.steps = sim_steps
         if simulation.status == SimulationStatus.COMPLETED and any(
@@ -505,8 +607,28 @@ class Orchestrator:
             if formatter:
                 try:
                     await formatter.format(report, output_dir)
+                    logger.info(
+                        "Report saved: simulation_id=%s format=%s output_dir=%s",
+                        sim_id,
+                        fmt_name,
+                        output_dir.resolve(),
+                    )
                 except Exception as e:
-                    logger.error(f"Failed to generate {fmt_name} report: {e}")
+                    logger.exception("Failed to generate %s report: %s", fmt_name, e)
+
+        logger.info(
+            "Simulation finished: simulation_id=%s status=%s total_techniques=%s "
+            "detected=%s partially_detected=%s not_detected=%s unknown=%s "
+            "detection_rate=%.3f",
+            sim_id,
+            simulation.status,
+            summary.total_techniques,
+            summary.detected,
+            summary.partially_detected,
+            summary.not_detected,
+            summary.unknown,
+            summary.detection_rate,
+        )
 
         return report
 
@@ -524,6 +646,7 @@ class Orchestrator:
             executor = plugin_registry.get_attack_executor("custom_python")
 
         if executor is None:
+            logger.error("No executor available for technique %s", plan_step.technique_id)
             return TechniqueResult(
                 technique_id=plan_step.technique_id,
                 success=False,
@@ -539,6 +662,11 @@ class Orchestrator:
                 parameters=plan_step.parameters,
             )
         except Exception as e:
+            logger.exception(
+                "Executor raised an exception: technique_id=%s target=%s",
+                plan_step.technique_id,
+                target,
+            )
             result = TechniqueResult(
                 technique_id=plan_step.technique_id,
                 success=False,
@@ -671,9 +799,28 @@ class Orchestrator:
                 executor = plugin_registry.get_attack_executor(executor_name)
                 if executor and step.technique_id in executor.supported_techniques:
                     try:
+                        logger.info(
+                            "Cleanup started: technique_id=%s target=%s executor=%s parameters=%s",
+                            step.technique_id,
+                            target,
+                            executor_name,
+                            step.parameters,
+                        )
                         await executor.cleanup(step.technique_id, target, step.parameters)
+                        logger.info(
+                            "Cleanup finished: technique_id=%s target=%s executor=%s",
+                            step.technique_id,
+                            target,
+                            executor_name,
+                        )
                     except Exception as e:
-                        logger.warning(f"Cleanup failed for {step.technique_id} on {target}: {e}")
+                        logger.exception(
+                            "Cleanup failed for %s on %s with executor %s: %s",
+                            step.technique_id,
+                            target,
+                            executor_name,
+                            e,
+                        )
 
     def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
         from purplestrike.remediation.engine import RemediationEngine

@@ -27,6 +27,7 @@ env/
 
 # PurpleStrike runtime
 results/
+logs/
 *.db
 purplestrike.db
 
