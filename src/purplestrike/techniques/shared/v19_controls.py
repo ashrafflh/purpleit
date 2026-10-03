@@ -123,11 +123,13 @@ def _windows_script(technique_id: str) -> str:
             "Select-Object Name,Version,Source; Write-Output 'No runtime was downgraded.'"
         ),
         "T1690": (
-            "$ErrorActionPreference='Stop'; $MaximumHistoryCount=0; "
-            "Import-Module PSReadLine -ErrorAction SilentlyContinue; "
-            "if (Get-Command Set-PSReadLineOption -ErrorAction SilentlyContinue) { "
-            "Set-PSReadLineOption -HistorySaveStyle SaveNothing }; "
-            "Write-Output 'history-saving-disabled-for-this-PurpleStrike-process'"
+            "$ErrorActionPreference='Stop'; Import-Module PSReadLine -ErrorAction Stop; "
+            "Set-PSReadLineOption -HistorySaveStyle SaveNothing -ErrorAction Stop; "
+            "$style = (Get-PSReadLineOption -ErrorAction Stop).HistorySaveStyle; "
+            "if ($style -ne 'SaveNothing') { "
+            "throw ('Unexpected PSReadLine history style: ' + $style) }; "
+            "Write-Output ('history-save-style=' + $style); "
+            "Write-Output 'scope=current-PurpleStrike-process'"
         ),
     }
     return scripts.get(technique_id, "")

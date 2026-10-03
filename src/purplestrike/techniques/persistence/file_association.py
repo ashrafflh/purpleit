@@ -25,16 +25,41 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "Set-Item -LiteralPath $extension -Value 'PurpleStrikeFile'; "
             "$commandKey = Join-Path $class 'shell\\open\\command'; "
             "New-Item -Path $commandKey -Force | Out-Null; "
-            "Set-Item -LiteralPath $commandKey -Value "
-            "'cmd.exe /d /c \"echo PurpleStrike-T1546.001>"
-            "%TEMP%\\purplestrike_assoc_marker.txt\"'; "
+            "$handler = Join-Path $env:TEMP 'purplestrike_assoc_handler.vbs'; "
             "$testFile = Join-Path $env:TEMP 'purplestrike_test.purplestrike'; "
             "$marker = Join-Path $env:TEMP 'purplestrike_assoc_marker.txt'; "
-            "[IO.File]::WriteAllText($testFile, 'PurpleStrike association test'); "
             "[IO.File]::Delete($marker); "
-            "Start-Process -FilePath $testFile -Wait; "
-            "for ($i=0; $i -lt 20 -and !(Test-Path -LiteralPath $marker); $i++) "
+            "$vbs = @("
+            "'Set shell = CreateObject(\"WScript.Shell\")',"
+            "'marker = shell.ExpandEnvironmentStrings(\"%TEMP%\\purplestrike_assoc_marker.txt\")',"
+            "'Set stream = CreateObject(\"Scripting.FileSystemObject\")"
+            ".CreateTextFile(marker, True)',"
+            "'stream.WriteLine \"PurpleStrike-T1546.001\"',"
+            "'stream.Close'); "
+            "Set-Content -LiteralPath $handler -Encoding ASCII -Value $vbs; "
+            "$wscript = Join-Path $env:SystemRoot 'System32\\wscript.exe'; "
+            "$payload = '\"' + $wscript + '\" //B //NoLogo \"' + "
+            "$handler + '\" \"%1\"'; "
+            "(Get-Item -LiteralPath $commandKey).SetValue('', $payload, "
+            "[Microsoft.Win32.RegistryValueKind]::String); "
+            "[IO.File]::WriteAllText($testFile, 'PurpleStrike association test'); "
+            "if (-not ('PurpleStrike.ShellNative' -as [type])) { "
+            "Add-Type -Namespace PurpleStrike -Name ShellNative -MemberDefinition '"
+            "[DllImport(\"shell32.dll\", CharSet=CharSet.Unicode, SetLastError=true)] "
+            "public static extern IntPtr ShellExecute(IntPtr window, string operation, "
+            "string file, string parameters, string directory, int showCommand); "
+            "[DllImport(\"shell32.dll\")] public static extern void SHChangeNotify("
+            "uint eventId, uint flags, IntPtr item1, IntPtr item2);' }; "
+            "[PurpleStrike.ShellNative]::SHChangeNotify(0x08000000, 0, "
+            "[IntPtr]::Zero, [IntPtr]::Zero); "
+            "$launch = [PurpleStrike.ShellNative]::ShellExecute("
+            "[IntPtr]::Zero, 'open', $testFile, $null, $env:TEMP, 0); "
+            "if ($launch.ToInt64() -le 32) { "
+            "throw ('ShellExecute failed with code ' + $launch.ToInt64()) }; "
+            "for ($i=0; $i -lt 60 -and !(Test-Path -LiteralPath $marker); $i++) "
             "{ Start-Sleep -Milliseconds 250 }; "
+            "if (!(Test-Path -LiteralPath $marker)) { "
+            "throw 'Registered file-association handler did not produce its marker' }; "
             "Get-Content -LiteralPath $marker -ErrorAction Stop"
         )
         if result.success:
@@ -48,6 +73,7 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             artifacts=[
                 "%TEMP%\\purplestrike_test.purplestrike",
                 "%TEMP%\\purplestrike_assoc_marker.txt",
+                "%TEMP%\\purplestrike_assoc_handler.vbs",
             ],
             evidence=["Opening the isolated extension invoked its registered handler."],
         )
@@ -77,7 +103,8 @@ async def cleanup(target: str) -> None:
             "-ErrorAction SilentlyContinue; "
             "Remove-Item -LiteralPath (Join-Path $env:TEMP "
             "'purplestrike_test.purplestrike'), (Join-Path $env:TEMP "
-            "'purplestrike_assoc_marker.txt') -Force -ErrorAction SilentlyContinue"
+            "'purplestrike_assoc_marker.txt'), (Join-Path $env:TEMP "
+            "'purplestrike_assoc_handler.vbs') -Force -ErrorAction SilentlyContinue"
         )
         removed = await conn.run_ps(cleanup_cmd)
         if not removed.success:
