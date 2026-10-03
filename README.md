@@ -347,7 +347,7 @@ purplestrike plan \
 
 ### `purplestrike techniques`
 
-List and inspect the 42 supported MITRE ATT&CK techniques.
+List and inspect the 61 built-in scenarios (60 unique ATT&CK technique IDs).
 
 ```bash
 # List all techniques
@@ -449,32 +449,62 @@ purplestrike playbooks validate path/to/playbook.yaml
 
 ---
 
-## MITRE ATT&CK Coverage
+## MITRE ATT&CK Alignment and Coverage
+
+The built-in catalog is pinned to **Enterprise ATT&CK v19.2**. It stores each
+technique object's current version, official tactics, ATT&CK URL, Detection
+Strategy, Analytics, and required log sources. ATT&CK v19 renamed `TA0005` to
+**Stealth** and introduced **Defense Impairment (`TA0112`)**; PurpleStrike uses
+those current tactic names while accepting the old `DEFENSE_EVASION` enum alias
+for saved-plan compatibility.
 
 | Version | Tactics | Techniques |
 |---|---|---|
-| v0.1 (MVP) | Initial Access, Execution, Persistence, Privilege Escalation, Credential Access | 42 |
-| v0.2 | + Defense Evasion, Lateral Movement | ~67 |
+| v0.1 (MVP) | Initial Access, Execution, Persistence, Privilege Escalation, Credential Access | 42 scenarios / 41 ATT&CK IDs |
+| Current | + ATT&CK v19 Stealth and Defense Impairment additions | 61 scenarios / 60 ATT&CK IDs |
+| v0.2 | + Lateral Movement | ~71 |
 | v0.3 | + Collection, Exfiltration, C2 | ~87 |
-| v1.0 | Full on-prem coverage | ~132 |
+| v1.0 | Broader on-prem procedure coverage | ~132 |
 
-### Technique Breakdown (v0.1 — 42 Techniques)
+### Current Technique Breakdown — 61 Scenarios
 
 | Tactic | ID | Techniques |
 |---|---|---|
-| Initial Access (TA0001) | T1190, T1133, T1078.001–003, T1566.001–002 | 8 |
-| Execution (TA0002) | T1059.001–005, T1047, T1569.002–003, T1204.001–002, T1053.005 | 11 |
+| Initial Access (TA0001) | T1190, T1133, T1078, T1078.001–003, T1566.001–002 | 8 |
+| Execution (TA0002) | T1059.001, T1059.003–005, T1047, T1569.002–003, T1204.001–002, T1053.005 | 10 |
 | Persistence (TA0003) | T1053.005p, T1547.001, T1547.004, T1546.001, T1546.003, T1546.008, T1136.001–002 | 8 |
-| Privilege Escalation (TA0004) | T1548.001–002, T1068, T1543.003, T1134.001–002, T1484.001, T1055.001 | 7 |
+| Privilege Escalation (TA0004) | T1548.001–002, T1068, T1543.003, T1134.001–002, T1484.001, T1055.001 | 8 |
 | Credential Access (TA0006) | T1558.003–004, T1110.001–003, T1552.001–002, T1003.001–002 | 8 |
+| Stealth (TA0005) | T1027.018, T1684, T1684.001–002 | 4 |
+| Defense Impairment (TA0112) | T1685, T1685.001–006, T1686, T1686.001–003, T1687–T1690 | 15 |
 
-Execution success means the implemented simulation completed. Several modules only
-enumerate prerequisites or create benign artifacts; their validation notes identify
-these limits, and their results cannot claim full technique coverage. Failed
-executions are classified as unknown or partially detected when an attempt raised
-an alert. The internal persistence variant `T1053.005p` uses MITRE `T1053.005` for
-detection matching. Linux systemd execution uses `T1569.003`; Kerberoasting and
-AS-REP Roasting use `T1558.003` and `T1558.004` respectively.
+The v19.2 audit also identified four new pre-compromise objects—T1682 and
+T1683/T1683.001/T1683.002—in Reconnaissance and Resource Development. They are
+not registered as endpoint BAS tests: querying a public AI service or merely
+generating content would not exercise a target-side control, and an artifact
+would not establish ATT&CK coverage. They require a future campaign/service
+testing workflow with authorized external accounts and delivery telemetry.
+
+Every scenario declares one evidence mode:
+
+| Mode | Meaning | ATT&CK coverage claim |
+|---|---|---|
+| `procedure` | The ATT&CK-aligned behavior and its success criterion completed | Eligible for validated/gap coverage |
+| `telemetry` | A safe subset generated the core detection telemetry | Partial evidence only |
+| `artifact` | A representative file or configuration marker was created | Not assessed |
+| `prerequisite` | The runner checked readiness or enumerated candidates | Not assessed |
+
+Detection status describes whether the SIEM alerted on the activity that actually
+ran. `coverage_status` separately reports `validated`, `gap`, `partial`, or
+`not_assessed`. The report's detection-rate denominator contains only successful
+`procedure` runs with a conclusive SIEM result. Probe-only, artifact-only, failed,
+and inconclusive runs therefore cannot inflate ATT&CK coverage. A single atomic
+procedure validates that procedure and analytic path; it never means every possible
+implementation of the ATT&CK technique is covered.
+
+The internal persistence scenario `T1053.005p` maps to ATT&CK `T1053.005` for
+detection. Linux service execution uses `T1569.003`; Kerberoasting and AS-REP
+Roasting use `T1558.003` and `T1558.004`.
 
 ---
 
@@ -520,10 +550,12 @@ purplestrike/
 │   ├── techniques/              # MITRE ATT&CK technique definitions
 │   │   ├── registry.py          # TechniqueRegistry with lazy auto-loading
 │   │   ├── initial_access/      # 8 techniques (T1190, T1133, T1078.x, T1566.x)
-│   │   ├── execution/           # 11 techniques (T1059.x, T1047, T1569.x, T1204.x)
+│   │   ├── execution/           # 10 techniques (T1059.x, T1047, T1569.x, T1204.x)
 │   │   ├── persistence/         # 8 techniques (T1053.005p, T1547.x, T1546.x, T1136.x)
-│   │   ├── privilege_escalation/# 7 techniques (T1548.x, T1068, T1543.003, T1134.x, T1055.001)
-│   │   └── credential_access/   # 8 techniques (T1558.x, T1110.x, T1552.x, T1003.x)
+│   │   ├── privilege_escalation/# 8 techniques (T1548.x, T1068, T1543.003, T1134.x, T1055.001)
+│   │   ├── credential_access/   # 8 techniques (T1558.x, T1110.x, T1552.x, T1003.x)
+│   │   ├── stealth/             # 4 ATT&CK v19 Stealth techniques
+│   │   └── defense_impairment/  # 15 ATT&CK v19 Defense Impairment techniques
 │   ├── validation/              # Detection validation engine
 │   │   └── engine.py            # Hybrid rule-based mapper + AI alert correlator
 │   ├── risk/                    # Financial risk quantification
@@ -605,9 +637,9 @@ Hybrid detection validation with two layers:
 1. **Rule-Based Mapper** — Checks if expected SIEM rule IDs appear in alerts (exact match)
 2. **AI Alert Correlator** — Uses LLM to analyze alert semantics when rule-based matching fails
 
-Returns `DetectionResult` with status (`detected` / `partially_detected` / `not_detected` / `unknown`), confidence score, matched rules, and AI reasoning.
+Returns `DetectionResult` with activity status (`detected` / `partially_detected` / `not_detected` / `unknown`), confidence, matched rules, ATT&CK coverage status, coverage eligibility, and reasoning.
 
-The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Queries allow a two-second clock margin (`siem.extra.clock_skew_seconds`), checking Windows event timestamps at the boundary to avoid including earlier cleanup events. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches, and probe-only or failed executions cannot establish full technique coverage.
+The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Queries allow a two-second clock margin (`siem.extra.clock_skew_seconds`), checking Windows event timestamps at the boundary to avoid including earlier cleanup events. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches. Coverage assessment is performed after execution using the scenario's evidence mode, independently of whether the generated activity produced an alert.
 
 #### Risk Quantifier (`risk/quantifier.py`)
 
@@ -623,7 +655,7 @@ FAIR-inspired financial risk model:
 For every undetected technique, generates:
 
 - **Wazuh-specific remediation** — Custom Wazuh rule XML (with MITRE tag), log source requirements, and testing instructions. Built-in database covers 6 key techniques (T1558.003, T1558.004, T1003.001, T1003.002, T1110.001, T1110.003)
-- **Generic guidance** — Data sources, detection logic, false positive considerations, and MITRE references for all 42 techniques
+- **Generic guidance** — Data sources, detection logic, false positive considerations, and MITRE references for all built-in scenarios
 
 #### Simulation Store (`reporting/store.py`)
 
@@ -657,7 +689,7 @@ The `TechniqueRegistry` uses lazy auto-loading (`_ensure_loaded()`) to avoid cir
 ```python
 from purplestrike.techniques.registry import technique_registry
 
-# List all 42 techniques
+# List all 61 built-in scenarios
 all_techniques = technique_registry.list_techniques()
 
 # Get a specific technique

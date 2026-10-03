@@ -10,33 +10,68 @@ INITIAL_ACCESS_TECHNIQUES = [
         technique_id="T1190",
         name="Exploit Public-Facing Application",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Exploits a vulnerability in an internet-facing application to gain initial access",
+        description="Sends a bounded exploit canary to a configured lab web application",
         target_os=["windows", "linux"],
         executor="custom_python",
         module="initial_access.exploit_public_app",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100001", confidence="medium", description="Detects exploitation attempts against public-facing services"),
+            DetectionMapping(
+                rule_id="100001",
+                confidence="medium",
+                description="Detects exploitation attempts against public-facing services",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="target_port", description="Target port to exploit", type="integer", required=True, default=80),
-            TechniqueParameter(name="exploit_module", description="Exploit module to use", type="string", required=True, default="generic_probe"),
+            TechniqueParameter(
+                name="target_port",
+                description="Target port to exploit",
+                type="integer",
+                required=True,
+                default=80,
+            ),
+            TechniqueParameter(
+                name="exploit_module",
+                description="Exploit module to use",
+                type="string",
+                required=True,
+                default="generic_probe",
+            ),
+            TechniqueParameter(
+                name="request_path",
+                description="Bounded HTTP exploit-canary path",
+                type="string",
+                default="/purplestrike/%2e%2e/%2e%2e/etc/passwd?canary=T1190",
+            ),
         ],
     ),
     Technique(
         technique_id="T1133",
         name="External Remote Services",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Uses external remote services (VPN, Citrix) to gain initial access",
+        description="Exercises the configured remote service and records session evidence",
         target_os=["windows", "linux"],
         executor="custom_python",
         module="initial_access.external_remote_services",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100002", confidence="medium", description="Detects suspicious remote service logins"),
+            DetectionMapping(
+                rule_id="100002",
+                confidence="medium",
+                description="Detects suspicious remote service logins",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="service_type", description="Remote service type (vpn, rdp, citrix)", type="string", required=True, default="rdp"),
+            TechniqueParameter(
+                name="service_type",
+                description=(
+                    "Expected external service context "
+                    "(auto, vpn, rdp, citrix, ssh, winrm)"
+                ),
+                type="string",
+                required=True,
+                default="auto",
+            ),
         ],
     ),
     Technique(
@@ -49,77 +84,104 @@ INITIAL_ACCESS_TECHNIQUES = [
         module="initial_access.valid_accounts",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100003", confidence="high", description="Detects authentication with valid credentials from unusual sources"),
+            DetectionMapping(
+                rule_id="100003",
+                confidence="high",
+                description="Detects authentication with valid credentials from unusual sources",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="account_type", description="Account type (domain, local, default)", type="string", default="domain"),
+            TechniqueParameter(
+                name="account_type",
+                description="Account type (domain, local, default)",
+                type="string",
+                default="domain",
+            ),
         ],
     ),
     Technique(
         technique_id="T1078.001",
         name="Valid Accounts: Default Accounts",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Uses default accounts to gain initial access",
+        description="Enumerates predefined accounts and their enabled state",
         target_os=["windows", "linux"],
         executor="custom_python",
         module="initial_access.default_accounts",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100004", confidence="high", description="Detects use of default accounts"),
+            DetectionMapping(
+                rule_id="100004", confidence="high", description="Detects use of default accounts"
+            ),
         ],
     ),
     Technique(
         technique_id="T1078.002",
         name="Valid Accounts: Domain Accounts",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Uses domain accounts to gain initial access to systems",
+        description="Enumerates domain accounts using the configured directory identity",
         target_os=["windows"],
         executor="custom_python",
         module="initial_access.domain_accounts",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100005", confidence="high", description="Detects domain account authentication anomalies"),
+            DetectionMapping(
+                rule_id="100005",
+                confidence="high",
+                description="Detects domain account authentication anomalies",
+            ),
         ],
     ),
     Technique(
         technique_id="T1078.003",
         name="Valid Accounts: Local Accounts",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Uses local accounts to gain initial access to systems",
+        description="Enumerates local accounts and their enabled state",
         target_os=["windows", "linux"],
         executor="custom_python",
         module="initial_access.local_accounts",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100006", confidence="high", description="Detects local account authentication anomalies"),
+            DetectionMapping(
+                rule_id="100006",
+                confidence="high",
+                description="Detects local account authentication anomalies",
+            ),
         ],
     ),
     Technique(
         technique_id="T1566.001",
         name="Phishing: Spearphishing Attachment",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Simulates phishing with malicious attachment (no real email sent)",
+        description="Stages a benign attachment marker; no email transport is included",
         target_os=["windows"],
         executor="custom_python",
         module="initial_access.phishing_attachment",
         risk_level="medium",
         safe_to_execute=True,
         detection_mappings=[
-            DetectionMapping(rule_id="100007", confidence="low", description="Detects phishing-related file artifacts"),
+            DetectionMapping(
+                rule_id="100007",
+                confidence="low",
+                description="Detects phishing-related file artifacts",
+            ),
         ],
     ),
     Technique(
         technique_id="T1566.002",
         name="Phishing: Spearphishing Link",
         tactic=TacticID.INITIAL_ACCESS,
-        description="Simulates phishing with malicious link (no real email sent)",
+        description="Stages a benign URL marker; no email transport is included",
         target_os=["windows"],
         executor="custom_python",
         module="initial_access.phishing_link",
         risk_level="medium",
         safe_to_execute=True,
         detection_mappings=[
-            DetectionMapping(rule_id="100008", confidence="low", description="Detects phishing-related URL artifacts"),
+            DetectionMapping(
+                rule_id="100008",
+                confidence="low",
+                description="Detects phishing-related URL artifacts",
+            ),
         ],
     ),
 ]

@@ -190,8 +190,12 @@ async def test_ai_alert_context_bounds_large_logs_without_mutating_alerts(
 
 
 async def test_persistence_task_matches_real_mitre_id() -> None:
-    alert = SIEMAlert(alert_id="task", timestamp=datetime.now(UTC), rule_id="92657",
-                      mitre_technique_ids=["T1053.005"])
+    alert = SIEMAlert(
+        alert_id="task",
+        timestamp=datetime.now(UTC),
+        rule_id="92657",
+        mitre_technique_ids=["T1053.005"],
+    )
     connector = FakeSIEMConnector([alert], [])
     result = await DetectionValidationEngine(connector).validate_step(
         "T1053.005p", [], "host", alert.timestamp, alert.timestamp
@@ -204,10 +208,13 @@ async def test_persistence_task_matches_real_mitre_id() -> None:
 async def test_ai_cannot_claim_detection_without_matching_evidence(reported_id) -> None:
     alert = SIEMAlert(alert_id="real-alert", timestamp=datetime.now(UTC), rule_id="unmapped")
     provider = Mock(spec=LLMProvider)
-    provider.complete = AsyncMock(return_value=(
-        '{"detection_status":"detected","confidence":0.9,"matched_alerts":["'
-        + reported_id + '"]}'
-    ))
+    provider.complete = AsyncMock(
+        return_value=(
+            '{"detection_status":"detected","confidence":0.9,"matched_alerts":["'
+            + reported_id
+            + '"]}'
+        )
+    )
     registry = Mock()
     registry.get_llm_provider.return_value = provider
     result = await DetectionValidationEngine(
@@ -239,13 +246,17 @@ async def test_saved_candidate_alerts_redact_configured_credentials(powershell_a
     config = PurpleStrikeConfig(target_password="private-password")
     powershell_alert.raw_log["message"] = "LDAP credential: private-password"
     engine = DetectionValidationEngine(FakeSIEMConnector([powershell_alert], []), config=config)
-    result = await engine.validate_step("T1059.001", [], "host", datetime.now(UTC), datetime.now(UTC))
+    result = await engine.validate_step(
+        "T1059.001", [], "host", datetime.now(UTC), datetime.now(UTC)
+    )
     assert result.status == DetectionStatus.DETECTED
     assert "private-password" not in result.model_dump_json()
     assert "[REDACTED]" in result.candidate_alerts[0].raw_log["message"]
 
 
-async def test_manager_clock_skew_matches_current_event_but_excludes_prior_cleanup(powershell_alert):
+async def test_manager_clock_skew_matches_current_event_but_excludes_prior_cleanup(
+    powershell_alert,
+):
     start = datetime.now(UTC)
     current = powershell_alert.model_copy(deep=True)
     current.timestamp = start - timedelta(milliseconds=500)
@@ -263,7 +274,9 @@ async def test_manager_clock_skew_matches_current_event_but_excludes_prior_clean
             return [a for a in self.alerts if start_time <= a.timestamp <= end_time]
 
     engine = DetectionValidationEngine(TimeFilteredConnector([current, previous], []))
-    result = await engine.validate_step("T1059.001", [], "host", start, start + timedelta(seconds=30))
+    result = await engine.validate_step(
+        "T1059.001", [], "host", start, start + timedelta(seconds=30)
+    )
     assert result.status == DetectionStatus.DETECTED
     assert [a.alert_id for a in result.matched_alerts] == [current.alert_id]
 
@@ -297,8 +310,8 @@ async def test_validation_matches_runtime_wazuh_rule_for_technique() -> None:
 
     assert connector.rules_technique == "T1003.001"
     assert connector.queried_source == "10.10.1.108"
-    assert result.status == DetectionStatus.PARTIALLY_DETECTED
-    assert result.confidence == 0.7
+    assert result.status == DetectionStatus.DETECTED
+    assert result.confidence == 1.0
     assert result.matched_rules == ["92900"]
     assert result.matched_alerts == [alert]
 
@@ -321,7 +334,7 @@ async def test_validation_matches_alert_mitre_even_without_expected_rule() -> No
         end_time=datetime.now(UTC),
     )
 
-    assert result.status == DetectionStatus.PARTIALLY_DETECTED
+    assert result.status == DetectionStatus.DETECTED
     assert result.matched_rules == ["92900"]
 
 
@@ -449,7 +462,7 @@ async def test_ai_correlation_uses_configured_deepseek_provider() -> None:
         end_time=datetime.now(UTC),
     )
 
-    assert result.status == DetectionStatus.PARTIALLY_DETECTED
-    assert result.confidence == 0.7
+    assert result.status == DetectionStatus.DETECTED
+    assert result.confidence == 0.9
     assert result.matched_alerts == [alert]
     assert "deepseek matched" in result.ai_correlation_reasoning

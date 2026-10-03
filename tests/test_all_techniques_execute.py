@@ -16,6 +16,7 @@ from purplestrike.models.config import (
     TargetHost,
 )
 from purplestrike.models.techniques import Technique
+from purplestrike.plugins.attack_executors.custom_python.executor import CustomPythonExecutor
 from purplestrike.techniques.connection import CommandResult
 from purplestrike.techniques.registry import technique_registry
 
@@ -37,7 +38,11 @@ class FakeConnection:
         if "Get-Process" in script:
             return CommandResult(stdout="explorer\nlsass\n", stderr="", exit_code=0)
         if "Get-Service" in script:
-            return CommandResult(stdout="Name : PurpleStrikeSvc\nStatus : Stopped\n", stderr="", exit_code=0)
+            return CommandResult(
+                stdout="Name : PurpleStrikeSvc\nStatus : Stopped\n",
+                stderr="",
+                exit_code=0,
+            )
         if "Get-ScheduledTask" in script:
             return CommandResult(stdout="PurpleStrikeTask\n", stderr="", exit_code=0)
         if "Get-WmiObject" in script:
@@ -111,6 +116,30 @@ def _module_for(technique: Technique) -> Any:
 
 
 @pytest.mark.asyncio
+async def test_shared_executor_uses_authoritative_technique_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    technique = technique_registry.get_technique("T1690")
+    assert technique is not None
+    module = _module_for(technique)
+    fake = FakeConnection()
+
+    async def fake_get_connection(target: str) -> FakeConnection:
+        return fake
+
+    monkeypatch.setattr(module, "get_connection", fake_get_connection)
+    result = await CustomPythonExecutor().execute(
+        "T1690",
+        "10.10.1.108",
+        {"_technique_id": "T1688"},
+    )
+
+    assert result.success
+    assert result.technique_id == "T1690"
+    assert "HistorySaveStyle SaveNothing" in fake.scripts[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("platform", ["windows", "linux"])
 async def test_all_registered_techniques_execute_with_default_parameters(
     monkeypatch: pytest.MonkeyPatch,
@@ -141,6 +170,7 @@ async def test_all_registered_techniques_execute_with_default_parameters(
             technique,
             "purple.local",
         )
+        parameters["_technique_id"] = technique.technique_id
         result = await module.execute("10.10.1.108", parameters)
         if not result.success:
             failures.append(f"{technique.technique_id}: {result.error}")

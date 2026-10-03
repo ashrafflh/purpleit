@@ -10,58 +10,31 @@ logger = logging.getLogger(__name__)
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
-    """Simulate access via external remote services such as VPN, RDP, or Citrix."""
+    """Exercise the configured remote-management session and capture session evidence."""
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        service_type = parameters.get("service_type", "rdp")
+        service_type = parameters.get("service_type", "auto")
         if conn.is_windows:
-            if service_type == "rdp":
-                result = await conn.run_ps(
-                    "Get-Service TermService -ErrorAction SilentlyContinue | "
-                    "Select-Object Name,Status,StartType | Format-List; "
-                    "$listener = Get-NetTCPConnection -LocalPort 3389 -State Listen "
-                    "-ErrorAction SilentlyContinue; "
-                    "Write-Output ('RDP listener present: ' + [bool]$listener)"
-                )
-            elif service_type == "vpn":
-                result = await conn.run_ps(
-                    "Get-Service -Name '*vpn*','*ras*' -ErrorAction SilentlyContinue | "
-                    "Select-Object Name,Status,StartType | Format-List; "
-                    "Get-NetAdapter | "
-                    "Where-Object { $_.InterfaceDescription -match 'VPN|tunnel' } | "
-                    "Select-Object Name,Status | Format-List"
-                )
-            else:
-                result = await conn.run_ps(
-                    "Get-Service -Name '*citrix*','*ica*' -ErrorAction SilentlyContinue | "
-                    "Select-Object Name,Status,StartType | Format-List; "
-                    "Test-Connection -ComputerName localhost -Count 1 -Quiet"
-                )
+            result = await conn.run_ps(
+                "$identity = [Security.Principal.WindowsIdentity]::GetCurrent(); "
+                "[PSCustomObject]@{Identity=$identity.Name; AuthenticationType="
+                "$identity.AuthenticationType; IsAuthenticated=$identity.IsAuthenticated; "
+                f"RequestedService='{service_type}'; Transport='WinRM'}} | Format-List"
+            )
         else:
-            if service_type == "vpn":
-                result = await conn.run_command(
-                    "systemctl list-units --type=service --all 2>/dev/null | "
-                    "grep -iE 'vpn|openvpn|ipsec|strongswan|libreswan' ; "
-                    "ip link show 2>/dev/null | grep -iE 'tun|tap|vpn'"
-                )
-            elif service_type == "rdp":
-                result = await conn.run_command(
-                    "systemctl list-units --type=service --all 2>/dev/null | "
-                    "grep -iE 'xrdp|vnc|x11rdp' ; "
-                    "ss -tlnp 2>/dev/null | grep -E '3389|3390|5900'"
-                )
-            else:
-                result = await conn.run_command(
-                    "systemctl list-units --type=service --all 2>/dev/null | "
-                    "grep -iE 'citrix|ica' ; "
-                    "ss -tlnp 2>/dev/null | grep -E '1494|2598'"
-                )
+            result = await conn.run_command(
+                "id; printf 'Transport=SSH\\n'; "
+                "printf 'SSH_CONNECTION=%s\\n' \"${SSH_CONNECTION:-unavailable}\""
+            )
         return TechniqueResult(
             technique_id="T1133",
             success=result.success,
             output=result.stdout[:4096],
             error=result.stderr[:1024] if not result.success else None,
+            evidence=[
+                "The configured remote service authenticated and executed an identity check."
+            ],
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
         )
     except Exception as e:

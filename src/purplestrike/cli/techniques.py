@@ -10,7 +10,9 @@ console = Console()
 
 @app.command(name="list")
 def list_techniques(
-    tactic: str | None = typer.Option(None, "--tactic", help="Filter by MITRE tactic ID (e.g. TA0001)"),
+    tactic: str | None = typer.Option(
+        None, "--tactic", help="Filter by MITRE tactic ID (e.g. TA0001)"
+    ),
 ) -> None:
     """List all supported MITRE ATT&CK techniques."""
     from purplestrike.techniques.registry import technique_registry
@@ -28,10 +30,18 @@ def list_techniques(
     table.add_column("Name")
     table.add_column("Tactic")
     table.add_column("Executor")
+    table.add_column("Emulation")
     table.add_column("Risk Level")
 
     for t in techniques:
-        table.add_row(t.technique_id, t.name, t.tactic_name, t.executor, t.risk_level)
+        table.add_row(
+            t.technique_id,
+            t.name,
+            t.tactic_name,
+            t.executor,
+            t.emulation_mode.value,
+            t.risk_level,
+        )
 
     console.print(table)
 
@@ -52,6 +62,25 @@ def show(technique_id: str) -> None:
     console.print(f"Target OS: {', '.join(technique.target_os)}")
     console.print(f"Executor: {technique.executor}")
     console.print(f"Risk Level: {technique.risk_level}")
+    console.print(
+        f"ATT&CK: v{technique.attack_version} / technique object "
+        f"v{technique.attack_technique_version}"
+    )
+    console.print(f"ATT&CK URL: {technique.attack_url}")
+    console.print(f"ATT&CK tactics: {', '.join(technique.attack_tactics)}")
+    console.print(f"Emulation mode: {technique.emulation_mode.value}")
+    console.print(f"Procedure: {technique.procedure}")
+    if technique.validation_notes:
+        console.print(f"Coverage limitation: {technique.validation_notes}")
+    if technique.detection_strategy_id:
+        console.print(
+            f"Detection strategy: {technique.detection_strategy_id} "
+            f"({', '.join(technique.analytic_ids)})"
+        )
+    if technique.required_log_sources:
+        console.print(f"Required log sources: {', '.join(technique.required_log_sources)}")
+    if technique.success_criteria:
+        console.print("Success criteria: " + "; ".join(technique.success_criteria))
 
     if technique.parameters:
         console.print("\n[bold]Parameters:[/bold]")

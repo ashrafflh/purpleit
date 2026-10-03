@@ -17,16 +17,32 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.scheduled_task",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100200", confidence="high", description="Detects scheduled task creation for persistence"),
+            DetectionMapping(
+                rule_id="100200",
+                confidence="high",
+                description="Detects scheduled task creation for persistence",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True, default="PurpleStrikeTask"),
-            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True, default="cmd.exe"),
+            TechniqueParameter(
+                name="task_name",
+                description="Scheduled task name",
+                type="string",
+                required=True,
+                default="PurpleStrikeTask",
+            ),
+            TechniqueParameter(
+                name="command",
+                description="Command to schedule",
+                type="string",
+                required=True,
+                default="cmd.exe",
+            ),
         ],
     ),
     Technique(
         technique_id="T1547.001",
-        name="Boot or Logon Autostart Execution: Registry Run Keys",
+        name="Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
         tactic=TacticID.PERSISTENCE,
         description="Adds a registry run key for persistence",
         target_os=["windows"],
@@ -34,11 +50,27 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.registry_run_keys",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100201", confidence="high", description="Detects registry run key modification"),
+            DetectionMapping(
+                rule_id="100201",
+                confidence="high",
+                description="Detects registry run key modification",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="key_path", description="Registry key path", type="string", required=True, default="HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"),
-            TechniqueParameter(name="value", description="Registry value to set", type="string", required=True, default="cmd.exe /c echo PurpleStrike"),
+            TechniqueParameter(
+                name="key_path",
+                description="Registry key path",
+                type="string",
+                required=True,
+                default="HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+            ),
+            TechniqueParameter(
+                name="value",
+                description="Registry value to set",
+                type="string",
+                required=True,
+                default="cmd.exe /c echo PurpleStrike",
+            ),
         ],
     ),
     Technique(
@@ -51,20 +83,28 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.winlogon_helper",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100202", confidence="medium", description="Detects Winlogon registry modification"),
+            DetectionMapping(
+                rule_id="100202",
+                confidence="medium",
+                description="Detects Winlogon registry modification",
+            ),
         ],
     ),
     Technique(
         technique_id="T1546.001",
         name="Event Triggered Execution: Change Default File Association",
         tactic=TacticID.PERSISTENCE,
-        description="Changes default file association for persistence",
+        description="Creates and invokes an isolated per-user file association",
         target_os=["windows"],
         executor="custom_python",
         module="persistence.file_association",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100203", confidence="medium", description="Detects file association changes"),
+            DetectionMapping(
+                rule_id="100203",
+                confidence="medium",
+                description="Detects file association changes",
+            ),
         ],
     ),
     Technique(
@@ -77,24 +117,47 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.wmi_event_subscription",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100204", confidence="high", description="Detects WMI event subscription creation"),
+            DetectionMapping(
+                rule_id="100204",
+                confidence="high",
+                description="Detects WMI event subscription creation",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="event_query", description="WMI event query", type="string", required=True, default="SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'notepad.exe'"),
-            TechniqueParameter(name="command", description="Command to execute on trigger", type="string", required=True, default="cmd.exe /c echo PurpleStrike"),
+            TechniqueParameter(
+                name="event_query",
+                description="WMI event query",
+                type="string",
+                required=True,
+                default="SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'notepad.exe'",
+            ),
+            TechniqueParameter(
+                name="command",
+                description="Benign command to execute on the process-start trigger",
+                type="string",
+                required=True,
+                default=(
+                    "cmd.exe /d /c echo PurpleStrike-T1546.003>"
+                    "C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt"
+                ),
+            ),
         ],
     ),
     Technique(
         technique_id="T1546.008",
         name="Event Triggered Execution: Accessibility Features",
         tactic=TacticID.PERSISTENCE,
-        description="Replaces accessibility feature binaries for persistence",
+        description="Uses a temporary IFEO debugger for an accessibility feature",
         target_os=["windows"],
         executor="custom_python",
         module="persistence.accessibility_features",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100205", confidence="high", description="Detects accessibility feature binary replacement"),
+            DetectionMapping(
+                rule_id="100205",
+                confidence="high",
+                description="Detects accessibility feature IFEO hijacking",
+            ),
         ],
     ),
     Technique(
@@ -107,10 +170,18 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.create_local_account",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100206", confidence="high", description="Detects local account creation"),
+            DetectionMapping(
+                rule_id="100206", confidence="high", description="Detects local account creation"
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="username", description="Account username to create", type="string", required=True, default="purplestrike_local"),
+            TechniqueParameter(
+                name="username",
+                description="Account username to create",
+                type="string",
+                required=True,
+                default="purplestrike_local",
+            ),
         ],
     ),
     Technique(
@@ -123,11 +194,21 @@ PERSISTENCE_TECHNIQUES = [
         module="persistence.create_domain_account",
         risk_level="high",
         detection_mappings=[
-            DetectionMapping(rule_id="100207", confidence="high", description="Detects domain account creation"),
+            DetectionMapping(
+                rule_id="100207", confidence="high", description="Detects domain account creation"
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="username", description="Domain account username to create", type="string", required=True, default="purplestrike_domain"),
-            TechniqueParameter(name="domain", description="Target domain", type="string", required=True),
+            TechniqueParameter(
+                name="username",
+                description="Domain account username to create",
+                type="string",
+                required=True,
+                default="purplestrike_domain",
+            ),
+            TechniqueParameter(
+                name="domain", description="Target domain", type="string", required=True
+            ),
         ],
     ),
 ]

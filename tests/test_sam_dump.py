@@ -15,6 +15,8 @@ class FakeConnection:
 
     async def run_ps(self, script: str, timeout: int = 60) -> CommandResult:
         self.scripts.append(script)
+        if "reg.exe save HKLM\\SAM" in script:
+            return CommandResult("SAM hive saved (4096 bytes) and removed", "", 0)
         if "HKLM\\SAM\\SAM" in script:
             return CommandResult("HKEY_LOCAL_MACHINE\\SAM\\SAM", "", 0)
         if "HKLM\\SAM" in script:
@@ -44,9 +46,9 @@ async def test_sam_dump_registry_method_builds_output(monkeypatch) -> None:
     assert result.success is True
     assert "SAM registry access check: Access denied" in result.output
     assert "ERROR: Access is denied." in result.output
-    assert "Registry method simulation:" in result.output
+    assert "Registry method:" in result.output
     assert fake_conn.scripts[0].startswith("reg.exe query HKLM\\SAM")
-    assert fake_conn.scripts[1].startswith("reg.exe query HKLM\\SAM\\SAM")
+    assert "reg.exe save HKLM\\SAM" in fake_conn.scripts[1]
     assert fake_conn.disconnected is True
 
 

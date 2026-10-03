@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import logging
 import inspect
+import logging
 import time
 from typing import Any
 
@@ -45,6 +45,10 @@ class CustomPythonExecutor:
             **{p.name: p.default for p in technique.parameters if p.default is not None},
             **{key: value for key, value in parameters.items() if value is not None},
         }
+        # Shared executors need an authoritative scenario identity. Keep it
+        # reserved so a plan cannot make one ATT&CK ID execute another ID's
+        # behavior while retaining the original report attribution.
+        parameters["_technique_id"] = technique_id
         missing = [p.name for p in technique.parameters
                    if p.required and parameters.get(p.name) in (None, "")]
         if missing:
@@ -116,7 +120,9 @@ class CustomPythonExecutor:
                 if module and hasattr(module, "cleanup"):
                     cleanup_params = inspect.signature(module.cleanup).parameters
                     if "parameters" in cleanup_params:
-                        await module.cleanup(target=target, parameters=parameters)
+                        cleanup_parameters = dict(parameters or {})
+                        cleanup_parameters["_technique_id"] = technique_id
+                        await module.cleanup(target=target, parameters=cleanup_parameters)
                     else:
                         await module.cleanup(target=target)
             except Exception as e:

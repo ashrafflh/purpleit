@@ -15,6 +15,7 @@ from purplestrike.models.config import PurpleStrikeConfig
 from purplestrike.models.remediation import RemediationEntry
 from purplestrike.models.report import SimulationReport, SimulationSummary
 from purplestrike.models.simulation import (
+    CoverageStatus,
     DetectionResult,
     DetectionStatus,
     ExecutionStatus,
@@ -23,7 +24,7 @@ from purplestrike.models.simulation import (
     SimulationStatus,
     SimulationStep,
 )
-from purplestrike.models.techniques import Technique, TechniqueResult
+from purplestrike.models.techniques import EmulationMode, Technique, TechniqueResult
 from purplestrike.techniques.registry import technique_registry
 
 logger = logging.getLogger(__name__)
@@ -43,17 +44,20 @@ class Orchestrator:
 
     def _set_target_credentials(self) -> None:
         from purplestrike.techniques.connection import set_target_credentials, set_target_platforms
+
         set_target_credentials(
             domain=self.config.target_ad_domain,
             username=self.config.target_username,
             password=self.config.target_password,
         )
-        set_target_platforms({
-            address: str(host.os)
-            for group in self.config.target_groups.values()
-            for host in group.hosts
-            for address in (host.hostname, host.ip)
-        })
+        set_target_platforms(
+            {
+                address: str(host.os)
+                for group in self.config.target_groups.values()
+                for host in group.hosts
+                for address in (host.hostname, host.ip)
+            }
+        )
 
     async def generate_plan(
         self,
@@ -108,14 +112,16 @@ class Orchestrator:
 
         steps = []
         for step_data in data.get("steps", []):
-            steps.append(AttackPlanStep(
-                order=step_data.get("order", len(steps) + 1),
-                technique_id=step_data.get("technique_id", ""),
-                technique_name=step_data.get("technique_name", ""),
-                parameters=step_data.get("parameters", {}),
-                expected_detection_rules=step_data.get("expected_detection_rules", []),
-                risk_level=step_data.get("risk_level", "medium"),
-            ))
+            steps.append(
+                AttackPlanStep(
+                    order=step_data.get("order", len(steps) + 1),
+                    technique_id=step_data.get("technique_id", ""),
+                    technique_name=step_data.get("technique_name", ""),
+                    parameters=step_data.get("parameters", {}),
+                    expected_detection_rules=step_data.get("expected_detection_rules", []),
+                    risk_level=step_data.get("risk_level", "medium"),
+                )
+            )
 
         return AttackPlan(
             name=data.get("name", "Playbook"),
@@ -179,14 +185,16 @@ class Orchestrator:
 
         steps = []
         for i, t in enumerate(techniques[: self.config.max_steps], 1):
-            steps.append(AttackPlanStep(
-                order=i,
-                technique_id=t.technique_id,
-                technique_name=t.name,
-                parameters=self._default_parameters_for_technique(t, target_group_name),
-                expected_detection_rules=[dm.rule_id for dm in t.detection_mappings],
-                risk_level=t.risk_level,
-            ))
+            steps.append(
+                AttackPlanStep(
+                    order=i,
+                    technique_id=t.technique_id,
+                    technique_name=t.name,
+                    parameters=self._default_parameters_for_technique(t, target_group_name),
+                    expected_detection_rules=[dm.rule_id for dm in t.detection_mappings],
+                    risk_level=t.risk_level,
+                )
+            )
 
         return AttackPlan(
             name="Default Technique Selection",
@@ -218,8 +226,7 @@ class Orchestrator:
             name=plan.name,
             description=plan.description,
             steps=[
-                step.model_copy(update={"order": i})
-                for i, step in enumerate(filtered_steps, 1)
+                step.model_copy(update={"order": i}) for i, step in enumerate(filtered_steps, 1)
             ],
             target_group=plan.target_group,
             created_at=plan.created_at,
@@ -230,19 +237,19 @@ class Orchestrator:
         technique: Technique,
         target_group_name: str,
     ) -> dict[str, Any]:
-        parameters = {
-            p.name: p.default
-            for p in technique.parameters
-            if p.default is not None
-        }
+        parameters = {p.name: p.default for p in technique.parameters if p.default is not None}
         for resource_name in ("task_name", "service_name"):
             if resource_name in parameters:
                 parameters[resource_name] = f"{parameters[resource_name]}_{uuid4().hex[:10]}"
         target_group = self.config.target_groups.get(target_group_name)
 
-        if target_group and target_group.domain and "domain" not in parameters:
-            if any(p.name == "domain" for p in technique.parameters):
-                parameters["domain"] = target_group.domain
+        if (
+            target_group
+            and target_group.domain
+            and "domain" not in parameters
+            and any(p.name == "domain" for p in technique.parameters)
+        ):
+            parameters["domain"] = target_group.domain
 
         if self.config.target_username:
             for account_param in ("target_account", "account_list"):
@@ -321,6 +328,7 @@ class Orchestrator:
         dry_run: bool = False,
     ) -> SimulationReport | None:
         from purplestrike.techniques.registry import load_default_techniques
+
         load_default_techniques()
 
         plan = await self.generate_plan(
@@ -380,8 +388,10 @@ class Orchestrator:
                 simulation.status = SimulationStatus.ABORTED
                 break
 
-            console.print(f"\n[*] Executing step {i}/{len(plan.steps)}: "
-                          f"{plan_step.technique_id} {plan_step.technique_name}...")
+            console.print(
+                f"\n[*] Executing step {i}/{len(plan.steps)}: "
+                f"{plan_step.technique_id} {plan_step.technique_name}..."
+            )
 
             step_start = datetime.now(UTC)
             technique_result = await self._execute_step(
@@ -392,15 +402,14 @@ class Orchestrator:
             step_end = datetime.now(UTC)
 
             exec_status = (
-                ExecutionStatus.SUCCESS
-                if technique_result.success
-                else ExecutionStatus.FAILURE
+                ExecutionStatus.SUCCESS if technique_result.success else ExecutionStatus.FAILURE
             )
 
             detection_result = DetectionResult(status=DetectionStatus.UNKNOWN)
             validation_end = step_end
             if siem_connector:
                 import asyncio
+
                 await asyncio.sleep(self.config.detection_check_delay)
                 validation_end = datetime.now(UTC)
                 detection_result = await self._validate_detection(
@@ -413,7 +422,10 @@ class Orchestrator:
                     execution_output=technique_result.output,
                 )
 
-            detection_result = self._account_for_execution(detection_result, technique_result.success)
+            detection_result = self._account_for_execution(
+                detection_result, technique_result.success
+            )
+            detection_result = self._assess_coverage(detection_result, technique_result)
             det_status = detection_result.status
             det_icon = {
                 "detected": "[green]DETECTED[/green]",
@@ -428,6 +440,10 @@ class Orchestrator:
                 f"({technique_result.execution_time_seconds:.1f}s)"
             )
             console.print(f"    {det_icon.get(det_status, det_status)}")
+            console.print(
+                f"    ATT&CK coverage: {detection_result.coverage_status.value} "
+                f"({technique_result.emulation_mode or EmulationMode.PROCEDURE})"
+            )
             if not technique_result.success and technique_result.error:
                 console.print(f"    Error: {technique_result.error[:500]}", markup=False)
 
@@ -445,6 +461,8 @@ class Orchestrator:
                 execution_output=technique_result.output,
                 execution_error=technique_result.error,
                 artifacts=technique_result.artifacts,
+                emulation_mode=technique_result.emulation_mode or EmulationMode.PROCEDURE,
+                evidence=technique_result.evidence,
                 detection_result=detection_result,
             )
             sim_steps.append(sim_step)
@@ -482,7 +500,7 @@ class Orchestrator:
         output_dir = Path(self.config.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        for fmt_name in (["json", "csv"] if self.config.output_dir else []):
+        for fmt_name in ["json", "csv"] if self.config.output_dir else []:
             formatter = plugin_registry.get_report_formatter(fmt_name)
             if formatter:
                 try:
@@ -528,6 +546,11 @@ class Orchestrator:
                 execution_status=ExecutionStatus.FAILURE,
             )
         result.execution_time_seconds = time.monotonic() - start
+        technique = self._technique_registry.get_technique(plan_step.technique_id)
+        if result.emulation_mode is None:
+            result.emulation_mode = (
+                technique.emulation_mode if technique else EmulationMode.PREREQUISITE
+            )
         return result
 
     @staticmethod
@@ -539,11 +562,65 @@ class Orchestrator:
             result.confidence = min(result.confidence, 0.7)
         elif result.status == DetectionStatus.NOT_DETECTED:
             result.status = DetectionStatus.UNKNOWN
-        result.ai_correlation_reasoning = " ".join(filter(None, [
-            result.ai_correlation_reasoning,
-            "Execution failed. Any matched alerts describe the attempted activity; "
-            "this run cannot establish detection coverage for successful execution.",
-        ]))
+        result.ai_correlation_reasoning = " ".join(
+            filter(
+                None,
+                [
+                    result.ai_correlation_reasoning,
+                    "Execution failed. Any matched alerts describe the attempted activity; "
+                    "this run cannot establish detection coverage for successful execution.",
+                ],
+            )
+        )
+        return result
+
+    def _assess_coverage(
+        self,
+        result: DetectionResult,
+        technique_result: TechniqueResult,
+    ) -> DetectionResult:
+        technique = self._technique_registry.get_technique(technique_result.technique_id)
+        mode = technique_result.emulation_mode or (
+            technique.emulation_mode if technique else EmulationMode.PREREQUISITE
+        )
+
+        if not technique_result.success:
+            result.coverage_status = CoverageStatus.NOT_ASSESSED
+            result.coverage_eligible = False
+            result.coverage_reason = (
+                "The executor did not meet its success criteria; ATT&CK coverage was not assessed."
+            )
+            return result
+
+        limitation = technique.validation_notes if technique else ""
+        if mode == EmulationMode.PROCEDURE:
+            if result.status == DetectionStatus.DETECTED:
+                result.coverage_status = CoverageStatus.VALIDATED
+            elif result.status == DetectionStatus.PARTIALLY_DETECTED:
+                result.coverage_status = CoverageStatus.PARTIAL
+            elif result.status == DetectionStatus.NOT_DETECTED:
+                result.coverage_status = CoverageStatus.GAP
+            else:
+                result.coverage_status = CoverageStatus.NOT_ASSESSED
+            result.coverage_eligible = result.status != DetectionStatus.UNKNOWN
+            result.coverage_reason = (
+                "The built-in executor completed an ATT&CK-aligned procedure."
+                if result.coverage_eligible
+                else "No conclusive SIEM result was available for the completed procedure."
+            )
+            return result
+
+        result.coverage_eligible = False
+        if mode == EmulationMode.TELEMETRY:
+            result.coverage_status = CoverageStatus.PARTIAL
+            prefix = "The run exercised detection-relevant telemetry only."
+        elif mode == EmulationMode.ARTIFACT:
+            result.coverage_status = CoverageStatus.NOT_ASSESSED
+            prefix = "The run created a representative artifact only."
+        else:
+            result.coverage_status = CoverageStatus.NOT_ASSESSED
+            prefix = "The run checked prerequisites only."
+        result.coverage_reason = " ".join(part for part in (prefix, limitation) if part)
         return result
 
     async def _validate_detection(
@@ -585,6 +662,7 @@ class Orchestrator:
         if technique:
             return technique.tactic
         from purplestrike.models.techniques import TacticID
+
         return TacticID.INITIAL_ACCESS
 
     async def _cleanup_all(self, plan: AttackPlan, plugin_registry: Any, target: str) -> None:
@@ -595,9 +673,7 @@ class Orchestrator:
                     try:
                         await executor.cleanup(step.technique_id, target, step.parameters)
                     except Exception as e:
-                        logger.warning(
-                            f"Cleanup failed for {step.technique_id} on {target}: {e}"
-                        )
+                        logger.warning(f"Cleanup failed for {step.technique_id} on {target}: {e}")
 
     def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
         from purplestrike.remediation.engine import RemediationEngine

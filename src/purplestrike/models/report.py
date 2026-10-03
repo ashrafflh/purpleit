@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field
 
-from .simulation import DetectionStatus, SimulationStatus, SimulationStep
+from .simulation import CoverageStatus, DetectionStatus, SimulationStatus, SimulationStep
 
 
 class SimulationSummary(BaseModel):
@@ -13,6 +13,11 @@ class SimulationSummary(BaseModel):
     partially_detected: int = 0
     not_detected: int = 0
     unknown: int = 0
+    coverage_validated: int = 0
+    coverage_gaps: int = 0
+    coverage_partial: int = 0
+    coverage_not_assessed: int = 0
+    coverage_eligible_techniques: int = 0
     detection_rate: float = 0.0
     total_annualized_risk: float = 0.0
     risk_by_tactic: dict[str, float] = Field(default_factory=dict)
@@ -28,6 +33,28 @@ class SimulationSummary(BaseModel):
         not_det = sum(1 for s in steps if s.detection_status == DetectionStatus.NOT_DETECTED)
         unknown = sum(1 for s in steps if s.detection_status == DetectionStatus.UNKNOWN)
 
+        coverage_validated = sum(
+            1 for step in steps if step.detection_result.coverage_status == CoverageStatus.VALIDATED
+        )
+        coverage_gaps = sum(
+            1 for step in steps if step.detection_result.coverage_status == CoverageStatus.GAP
+        )
+        coverage_partial = sum(
+            1 for step in steps if step.detection_result.coverage_status == CoverageStatus.PARTIAL
+        )
+        coverage_not_assessed = sum(
+            1
+            for step in steps
+            if step.detection_result.coverage_status == CoverageStatus.NOT_ASSESSED
+        )
+        eligible_steps = [step for step in steps if step.detection_result.coverage_eligible]
+        eligible_detected = sum(
+            1
+            for step in eligible_steps
+            if step.detection_status
+            in (DetectionStatus.DETECTED, DetectionStatus.PARTIALLY_DETECTED)
+        )
+
         total_risk = sum(s.detection_result.risk.annualized_loss_expectancy for s in steps)
 
         risk_by_tactic: dict[str, float] = {}
@@ -42,7 +69,12 @@ class SimulationSummary(BaseModel):
             partially_detected=partial,
             not_detected=not_det,
             unknown=unknown,
-            detection_rate=(detected + partial) / total if total > 0 else 0.0,
+            coverage_validated=coverage_validated,
+            coverage_gaps=coverage_gaps,
+            coverage_partial=coverage_partial,
+            coverage_not_assessed=coverage_not_assessed,
+            coverage_eligible_techniques=len(eligible_steps),
+            detection_rate=(eligible_detected / len(eligible_steps) if eligible_steps else 0.0),
             total_annualized_risk=total_risk,
             risk_by_tactic=risk_by_tactic,
         )

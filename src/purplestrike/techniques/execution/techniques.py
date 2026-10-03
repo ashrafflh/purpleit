@@ -16,7 +16,11 @@ EXECUTION_TECHNIQUES = [
         module="execution.powershell",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100100", confidence="high", description="Detects suspicious PowerShell execution"),
+            DetectionMapping(
+                rule_id="100100",
+                confidence="high",
+                description="Detects suspicious PowerShell execution",
+            ),
             DetectionMapping(
                 rule_id="91815",
                 confidence="medium",
@@ -24,8 +28,16 @@ EXECUTION_TECHNIQUES = [
             ),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="PowerShell command to execute", type="string", required=True, default="Write-Output 'PurpleStrike PowerShell simulation'"),
-            TechniqueParameter(name="encoded", description="Use encoded command", type="boolean", default=False),
+            TechniqueParameter(
+                name="command",
+                description="PowerShell command to execute",
+                type="string",
+                required=True,
+                default="Write-Output 'PurpleStrike PowerShell simulation'",
+            ),
+            TechniqueParameter(
+                name="encoded", description="Use encoded command", type="boolean", default=False
+            ),
         ],
     ),
     Technique(
@@ -38,26 +50,46 @@ EXECUTION_TECHNIQUES = [
         module="execution.cmd_shell",
         risk_level="low",
         detection_mappings=[
-            DetectionMapping(rule_id="100101", confidence="high", description="Detects suspicious cmd.exe execution"),
+            DetectionMapping(
+                rule_id="100101",
+                confidence="high",
+                description="Detects suspicious cmd.exe execution",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="Command to execute", type="string", required=True, default="echo PurpleStrike cmd simulation"),
+            TechniqueParameter(
+                name="command",
+                description="Command to execute",
+                type="string",
+                required=True,
+                default="echo PurpleStrike cmd simulation",
+            ),
         ],
     ),
     Technique(
         technique_id="T1059.004",
-        name="Command and Scripting Interpreter: Bash",
+        name="Command and Scripting Interpreter: Unix Shell",
         tactic=TacticID.EXECUTION,
-        description="Executes commands via Bash",
+        description="Executes commands through a Unix shell (Bash on the built-in Linux runner)",
         target_os=["linux"],
         executor="custom_python",
         module="execution.bash",
         risk_level="low",
         detection_mappings=[
-            DetectionMapping(rule_id="100102", confidence="high", description="Detects suspicious bash execution"),
+            DetectionMapping(
+                rule_id="100102",
+                confidence="high",
+                description="Detects suspicious Unix shell execution",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="Bash command to execute", type="string", required=True, default="echo PurpleStrike bash simulation"),
+            TechniqueParameter(
+                name="command",
+                description="Unix shell command to execute",
+                type="string",
+                required=True,
+                default="echo PurpleStrike shell simulation",
+            ),
         ],
     ),
     Technique(
@@ -70,7 +102,11 @@ EXECUTION_TECHNIQUES = [
         module="execution.visual_basic",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100103", confidence="medium", description="Detects VBA macro execution"),
+            DetectionMapping(
+                rule_id="100103",
+                confidence="medium",
+                description="Detects VBScript or VBA execution",
+            ),
         ],
     ),
     Technique(
@@ -83,10 +119,18 @@ EXECUTION_TECHNIQUES = [
         module="execution.wmi",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100104", confidence="high", description="Detects WMI remote execution"),
+            DetectionMapping(
+                rule_id="100104", confidence="high", description="Detects WMI remote execution"
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="command", description="WMI command to execute", type="string", required=True, default="whoami"),
+            TechniqueParameter(
+                name="command",
+                description="WMI command to execute",
+                type="string",
+                required=True,
+                default="whoami",
+            ),
         ],
     ),
     Technique(
@@ -99,7 +143,11 @@ EXECUTION_TECHNIQUES = [
         module="execution.launch_agent",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100105", confidence="medium", description="Detects suspicious launch agent creation"),
+            DetectionMapping(
+                rule_id="100105",
+                confidence="medium",
+                description="Detects suspicious systemd unit creation and systemctl execution",
+            ),
         ],
     ),
     Technique(
@@ -112,39 +160,63 @@ EXECUTION_TECHNIQUES = [
         module="execution.service_execution",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100106", confidence="high", description="Detects suspicious service creation or modification"),
+            DetectionMapping(
+                rule_id="100106",
+                confidence="high",
+                description="Detects suspicious service creation or modification",
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="service_name", description="Service name to create/modify", type="string", required=True, default="PurpleStrikeSvc"),
-            TechniqueParameter(name="command", description="Command the service will execute", type="string", required=True, default="whoami"),
+            TechniqueParameter(
+                name="service_name",
+                description="Service name to create/modify",
+                type="string",
+                required=True,
+                default="PurpleStrikeSvc",
+            ),
+            TechniqueParameter(
+                name="command",
+                description="Command the service will execute",
+                type="string",
+                required=True,
+                default="whoami",
+            ),
         ],
     ),
     Technique(
         technique_id="T1204.001",
         name="User Execution: Malicious Link",
         tactic=TacticID.EXECUTION,
-        description="Simulates user clicking a malicious link (no real network traffic)",
+        description="Opens a reserved-domain URL through the registered Windows protocol handler",
         target_os=["windows"],
         executor="custom_python",
         module="execution.malicious_link",
         risk_level="low",
         safe_to_execute=True,
         detection_mappings=[
-            DetectionMapping(rule_id="100107", confidence="low", description="Detects suspicious browser or URL activity"),
+            DetectionMapping(
+                rule_id="100107",
+                confidence="low",
+                description="Detects suspicious browser or URL activity",
+            ),
         ],
     ),
     Technique(
         technique_id="T1204.002",
         name="User Execution: Malicious File",
         tactic=TacticID.EXECUTION,
-        description="Simulates user opening a malicious file",
+        description="Creates and launches a benign script-shaped file and verifies execution",
         target_os=["windows"],
         executor="custom_python",
         module="execution.malicious_file",
         risk_level="low",
         safe_to_execute=True,
         detection_mappings=[
-            DetectionMapping(rule_id="100108", confidence="medium", description="Detects suspicious file execution"),
+            DetectionMapping(
+                rule_id="100108",
+                confidence="medium",
+                description="Detects suspicious file execution",
+            ),
         ],
     ),
     Technique(
@@ -157,11 +229,25 @@ EXECUTION_TECHNIQUES = [
         module="execution.scheduled_task",
         risk_level="medium",
         detection_mappings=[
-            DetectionMapping(rule_id="100109", confidence="high", description="Detects scheduled task creation"),
+            DetectionMapping(
+                rule_id="100109", confidence="high", description="Detects scheduled task creation"
+            ),
         ],
         parameters=[
-            TechniqueParameter(name="task_name", description="Scheduled task name", type="string", required=True, default="PurpleStrikeTask"),
-            TechniqueParameter(name="command", description="Command to schedule", type="string", required=True, default="whoami"),
+            TechniqueParameter(
+                name="task_name",
+                description="Scheduled task name",
+                type="string",
+                required=True,
+                default="PurpleStrikeTask",
+            ),
+            TechniqueParameter(
+                name="command",
+                description="Command to schedule",
+                type="string",
+                required=True,
+                default="whoami",
+            ),
         ],
     ),
 ]
