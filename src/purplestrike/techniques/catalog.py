@@ -678,8 +678,9 @@ EMULATION_PROFILES: dict[str, EmulationProfile] = {
     ),
     "T1053.005": _profile(
         EmulationMode.PROCEDURE,
-        "Register and start a temporary scheduled task.",
-        "The task reports exit code zero and writes command output.",
+        "Register and start a temporary scheduled task under the connecting user via S4U.",
+        "A new task run completes with exit code zero and its output file can be read.",
+        "S4U requires batch-logon rights and cannot access network or encrypted files.",
     ),
     "T1053.005p": _profile(
         EmulationMode.PROCEDURE,
@@ -763,7 +764,7 @@ EMULATION_PROFILES: dict[str, EmulationProfile] = {
     ),
     "T1055.001": _profile(
         EmulationMode.PREREQUISITE,
-        "Enumerate candidate target processes and loaded modules.",
+        "Check that the requested process exists and enumerate candidate target processes.",
         "The requested target process can be queried.",
         "No remote memory is allocated or written and no remote thread is created.",
     ),

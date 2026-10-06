@@ -243,10 +243,16 @@ EXECUTION_TECHNIQUES = [
             ),
             TechniqueParameter(
                 name="command",
-                description="Command to schedule",
+                description="Local command to schedule under the connecting user via S4U logon",
                 type="string",
                 required=True,
                 default="whoami",
+            ),
+            TechniqueParameter(
+                name="execution_timeout_seconds",
+                description="Maximum wait for task completion in seconds (1-300)",
+                type="integer",
+                default=30,
             ),
         ],
     ),

@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from purplestrike.models.techniques import ExecutionStatus, TechniqueResult
-from purplestrike.techniques.connection import TargetConnection, get_connection
+from purplestrike.techniques.connection import TargetConnection, command_error, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,18 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
         conn = await get_connection(target)
         result = await conn.run_ps(
             "$ErrorActionPreference = 'Stop'; "
+            "$identity = [Security.Principal.WindowsIdentity]::GetCurrent(); "
+            "$principal = New-Object Security.Principal.WindowsPrincipal($identity); "
+            "'LSASS access context: identity=' + $identity.Name + '; elevated=' + "
+            "$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator); "
+            "try { $ppl = Get-ItemProperty -LiteralPath "
+            "'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' -Name RunAsPPL -ErrorAction Stop; "
+            "'RunAsPPL configuration=' + $ppl.RunAsPPL + "
+            "' (configuration only; runtime protection is not verified)' } "
+            "catch { 'RunAsPPL configuration unavailable; runtime protection is unknown' }; "
+            "'Effective token privileges:'; whoami.exe /priv; "
+            "if ($LASTEXITCODE -ne 0) { 'Token privilege query failed' }; "
+            "$global:LASTEXITCODE = 0; "
             "$source = 'using System; using System.Runtime.InteropServices; "
             "public static class PurpleStrikeLsass { "
             '[DllImport("kernel32.dll", SetLastError=true)] '
@@ -28,6 +40,9 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             "$handle = [PurpleStrikeLsass]::OpenProcess($access, $false, $lsass.Id); "
             "if ($handle -eq [IntPtr]::Zero) { "
             "$code = [Runtime.InteropServices.Marshal]::GetLastWin32Error(); "
+            "if ($code -eq 5) { throw ('OpenProcess failed with Win32 error 5: Access denied. ' + "
+            "'Effective token permissions or LSASS protection may prevent this access; ' + "
+            "'the exact cause is not established. No LSASS memory was read.') }; "
             "throw ('OpenProcess failed with Win32 error ' + $code) }; "
             "try { 'Opened LSASS handle; pid=' + $lsass.Id + '; access=0x0410' } "
             "finally { [void][PurpleStrikeLsass]::CloseHandle($handle) }"
@@ -36,9 +51,12 @@ async def execute(target: str, parameters: dict[str, Any]) -> TechniqueResult:
             technique_id="T1003.001",
             success=result.success,
             output=result.stdout[:4096],
-            error=result.stderr[:1024] if not result.success else None,
+            error=command_error(result)[:1024] if not result.success else None,
             execution_status=ExecutionStatus.SUCCESS if result.success else ExecutionStatus.FAILURE,
-            evidence=["LSASS was opened with PROCESS_QUERY_INFORMATION and PROCESS_VM_READ."],
+            evidence=(
+                ["LSASS was opened with PROCESS_QUERY_INFORMATION and PROCESS_VM_READ."]
+                if result.success else []
+            ),
         )
     except Exception as e:
         logger.error(f"T1003.001 execution failed: {e}")
