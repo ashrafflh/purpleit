@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dotenv import load_dotenv
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 
 import purplestrike
@@ -33,6 +33,7 @@ def version() -> None:
 
 
 from purplestrike.cli import config as config_cmd  # noqa: E402
+from purplestrike.cli import connections as connections_cmd  # noqa: E402
 from purplestrike.cli import plan as plan_cmd  # noqa: E402
 from purplestrike.cli import playbooks as playbooks_cmd  # noqa: E402
 from purplestrike.cli import run as run_cmd  # noqa: E402
@@ -40,6 +41,7 @@ from purplestrike.cli import siem as siem_cmd  # noqa: E402
 from purplestrike.cli import techniques as techniques_cmd  # noqa: E402
 
 app.add_typer(config_cmd.app, name="config", help="Manage PurpleStrike configuration")
+app.add_typer(connections_cmd.app, name="connections", help="Validate agentless connections")
 app.add_typer(playbooks_cmd.app, name="playbooks", help="List and manage attack playbooks")
 app.add_typer(siem_cmd.app, name="siem", help="SIEM connector management")
 app.add_typer(techniques_cmd.app, name="techniques", help="List MITRE ATT&CK techniques")

@@ -43,12 +43,26 @@ class Orchestrator:
         self._set_target_credentials()
 
     def _set_target_credentials(self) -> None:
-        from purplestrike.techniques.connection import set_target_credentials, set_target_platforms
+        from purplestrike.techniques.connection import (
+            set_connection_settings,
+            set_target_credentials,
+            set_target_platforms,
+        )
 
         set_target_credentials(
             domain=self.config.target_ad_domain,
             username=self.config.target_username,
             password=self.config.target_password,
+        )
+        set_connection_settings(
+            self.config.connection,
+            {
+                address: host.connection_method
+                for group in self.config.target_groups.values()
+                for host in group.hosts
+                for address in (host.hostname, host.ip)
+                if host.connection_method is not None
+            },
         )
         set_target_platforms(
             {

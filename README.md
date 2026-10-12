@@ -119,14 +119,385 @@ purplestrike config show
 
 ---
 
-## WinRM Setup (Kerberos-less, IP-based, NTLM)
+## Agentless Windows connections
+
+PurpleStrike supports `winrm`, `winrm_nonadmin`, Windows `ssh`, and `wmi`.
+The default `auto` preserves the existing selection: Windows uses `winrm`, Linux
+uses `ssh`. Selecting a transport never changes the target's operating system,
+silently falls back to another transport, or elevates the account.
+
+| Mode | Target requirements | Test account | Controller requirements | Use when |
+|---|---|---|---|---|
+| `winrm` | WinRM/WinRS; TCP 5985 or configured HTTPS 5986 | Existing authorized account; typically local admin for elevated scenarios | Python + bundled pywinrm | Existing admin test setup, server administration, elevated procedures |
+| `winrm_nonadmin` | WinRM/WinRS with deliberately delegated shell access | Standard local/domain account **outside** local Administrators | Same as WinRM | Testing what an ordinary user can execute without pre-granting admin rights |
+| `ssh` on Windows | OpenSSH Server, allowed account, TCP 22 or configured port | Standard user or administrator; password or SSH key | `uv sync --extra ssh` | SSH is already approved/deployed, or a general standard-user shell is preferred |
+| `wmi` | WMI over DCOM: TCP 135 and negotiated RPC ports; SMB TCP 445 for staging/output | Admin, or delegated WMI/DCOM user with access to a dedicated SMB share | **Windows controller with Windows PowerShell 5.1** | Testing execution through WMI; exercising the DCOM access path independently of WinRM |
+| `ssh` on Linux | OpenSSH server and permitted login | Ordinary user; separate permissions for privileged commands | `uv sync --extra ssh` | Normal Linux agentless testing |
+
+All modes run with the selected account's effective permissions. Discovery,
+ordinary process execution, and user-owned resources can be tested as a standard
+user. Service creation, protected process access, and machine-wide modifications
+may require additional privileges. A transport connection does not grant those
+privileges. Administrative provisioning is separate from the test account.
+
+For your existing environment, start with `winrm_nonadmin` for procedures that
+only need user rights and retain `winrm` for tests that genuinely require an
+elevated token. Prefer Windows SSH when it is already part of the managed endpoint
+baseline. WMI/DCOM is useful when its execution path is itself relevant to the
+test, but requires more network and permission setup than either shell transport.
+Delegating remote shell access is an explicit test prerequisite: ordinary users
+in an enterprise do not automatically have it. These modes model execution with
+an authorized account; they do not reproduce an initial compromise or an
+interactive user's desktop session.
+
+WMI uses native .NET `System.Management` over DCOM and
+`Win32_Process.Create`; it does **not** execute through WinRM. WMI process creation
+does not return stdout or the child exit code, so this backend stages the script
+and completion/output files in an explicitly configured SMB share. This is a
+WMI/DCOM + SMB mode, not a DCOM-only output channel. No service or persistent agent
+is installed by the backend. Its temporary scripts and extra process ancestry
+are part of the transport's observable telemetry.
+
+### Selecting a connection and credentials
+
+Set these in `.env` (the CLI loads it) or use the corresponding `connection`
+settings in YAML. No existing WinRM setting needs to change to retain `auto`.
+
+```dotenv
+PURPLESTRIKE_CONNECTION_METHOD=winrm_nonadmin
+PURPLESTRIKE_CONNECT_TIMEOUT=15
+
+# Existing/common credentials remain available for winrm and other modes.
+PURPLESTRIKE_TARGET_AD_DOMAIN=CORP
+PURPLESTRIKE_TARGET_USERNAME=existing_test_admin
+PURPLESTRIKE_TARGET_PASSWORD=<existing-secret>
+
+# Use a machine-qualified name for a local standard user.
+PURPLESTRIKE_WINRM_NONADMIN_USERNAME=WORKSTATION\ps_test
+PURPLESTRIKE_WINRM_NONADMIN_PASSWORD=<standard-user-secret>
+PURPLESTRIKE_WINRM_NONADMIN_DOMAIN=WORKSTATION
+```
+
+`winrm_nonadmin`, `ssh`, and `wmi` accept their own credentials through
+`PURPLESTRIKE_WINRM_NONADMIN_*`, `PURPLESTRIKE_SSH_*`, and `PURPLESTRIKE_WMI_*`,
+where `*` is `USERNAME`, `PASSWORD`, or `DOMAIN`. Without a mode-specific username,
+common target credentials are used. If a mode-specific username is supplied,
+its password must also be supplied, or SSH key authentication configured; the
+common administrator password is not reused for that different username.
+
+Per-host `connection_method` overrides the global selection:
+
+```yaml
+connection:
+  method: winrm
+  ssh_port: 22
+  ssh_known_hosts: ./known_hosts
+target_groups:
+  lab:
+    name: lab
+    hosts:
+      - hostname: workstation.corp.example
+        ip: 192.0.2.10
+        os: windows
+        connection_method: ssh
+```
+
+The same host field is accepted in `PURPLESTRIKE_TARGET_GROUPS` JSON. Explicit
+`connections check --method ...` overrides selection for that check only.
+Mode-specific credentials and connection settings currently apply across hosts;
+only the transport selection is overridden per host. Use separate configurations
+for hosts that need different accounts or WMI staging paths.
+
+| Environment setting | YAML field under `connection` | Default |
+|---|---|---|
+| `PURPLESTRIKE_CONNECTION_METHOD` | `method` | `auto` |
+| `PURPLESTRIKE_CONNECT_TIMEOUT` | `connect_timeout` | `15` seconds |
+| `PURPLESTRIKE_WINRM_ENDPOINT` | `winrm_endpoint` | pywinrm HTTP endpoint for target |
+| `PURPLESTRIKE_WINRM_CERT_VALIDATION` | `winrm_cert_validation` | `ignore` (existing lab behavior) |
+| `PURPLESTRIKE_SSH_PORT` | `ssh_port` | `22` |
+| `PURPLESTRIKE_SSH_KNOWN_HOSTS` | `ssh_known_hosts` | normal OpenSSH known-hosts files |
+| `PURPLESTRIKE_SSH_CLIENT_KEYS` | `ssh_client_keys` | `[]` (normal key/agent discovery) |
+| `PURPLESTRIKE_WMI_SHARE` | `wmi_share` | `ADMIN$` |
+| `PURPLESTRIKE_WMI_SHARE_PATH` | `wmi_share_path` | `Temp` |
+| `PURPLESTRIKE_WMI_REMOTE_PATH` | `wmi_remote_path` | `C:\Windows\Temp` |
+
+The connection timeout bounds SSH connection/login and WMI connection operations.
+WinRM uses it for HTTP timeouts (with an operation/read-timeout margin) and may
+retry shell-opening connection failures up to three times. Command execution has
+its own timeout; it is not a hard total wall-clock bound including connection,
+output collection, and cleanup. A submitted command is never automatically rerun.
+
+### Delegated non-admin WinRM: target setup
+
+Run provisioning in **elevated Windows PowerShell on the target**. Use a dedicated
+standard account; do not add it to Administrators. For a local lab account:
+
+```powershell
+$credential = Get-Credential -UserName 'ps_test' -Message 'Password for the new local test user'
+New-LocalUser -Name $credential.UserName -Password $credential.Password `
+    -Description 'PurpleStrike standard test user'
+$account = "$env:COMPUTERNAME\$($credential.UserName)"
+Add-LocalGroupMember -SID 'S-1-5-32-545' -Member $account # Users
+Add-LocalGroupMember -SID 'S-1-5-32-580' -Member $account # Remote Management Users
+Enable-PSRemoting -Force
+```
+
+PurpleStrike uses **WinRS through pywinrm**, not a named PSRP PowerShell session
+configuration. Check/delegate WinRM resource access; changing only the
+`Microsoft.PowerShell` endpoint ACL is insufficient. The following preserves
+existing WinRM permissions and grants this account Generic Read + Execute:
+
+```powershell
+$sid = (New-Object Security.Principal.NTAccount($account)).Translate(
+    [Security.Principal.SecurityIdentifier])
+$original = (Get-Item WSMan:\localhost\Service\RootSDDL).Value
+$original | Set-Content -LiteralPath '.\winrm-root-sddl-before.txt'
+$descriptor = New-Object Security.AccessControl.CommonSecurityDescriptor($false, $false, $original)
+$descriptor.DiscretionaryAcl.AddAccess(
+    [Security.AccessControl.AccessControlType]::Allow, $sid, -1610612736,
+    [Security.AccessControl.InheritanceFlags]::None,
+    [Security.AccessControl.PropagationFlags]::None)
+Set-Item WSMan:\localhost\Service\RootSDDL -Value $descriptor.GetSddlForm('All') -Force
+```
+
+Keep firewall access scoped to the controller. Enterprise endpoint ACLs, logon
+rights, and deny policies can still prohibit access. This standard-user setup does
+not require disabling UAC or changing `LocalAccountTokenFilterPolicy`.
+
+The `winrm_nonadmin` backend sets the **WinRS** `noprofile` option before opening
+the shell and rejects a token containing the Administrators SID, including a
+deny-only membership. PowerShell's `-NoProfile` alone is a different setting.
+Windows user-profile/HKCU behavior can therefore differ from an interactive
+desktop session; validate user-profile-dependent procedures separately.
+
+Domain deployments should use their established Kerberos/hostname configuration.
+`PURPLESTRIKE_WINRM_TRANSPORT` still selects pywinrm authentication. An optional
+`PURPLESTRIKE_WINRM_ENDPOINT=https://{host}:5986/wsman` selects HTTPS and supports a
+per-target `{host}` substitution. Use `PURPLESTRIKE_WINRM_CERT_VALIDATION=validate`
+with trusted server certificates; the existing lab default is `ignore`.
+
+### Windows SSH: target setup
+
+In **elevated PowerShell on the target**, install and start OpenSSH Server:
+
+```powershell
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+# Substitute the actual controller address. Review any broader existing SSH rule.
+New-NetFirewallRule -Name PurpleStrike-SSH -DisplayName 'PurpleStrike SSH' `
+    -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 `
+    -RemoteAddress 192.0.2.20
+```
+
+Feature installation can fail through a remote WinRM session even when its account
+is an administrator. Run that provisioning step locally on the target or through
+the enterprise software deployment mechanism. Offline/WSUS-managed devices may
+require the matching Windows Features on Demand source. Do not interpret an
+installation failure as an SSH authentication failure.
+
+Permit the test account in `%ProgramData%\ssh\sshd_config` according to your
+existing policy. `AllowUsers`/`AllowGroups` are optional restrictions: if used, they
+must include the account and must preserve existing administrative access. For a
+local account, an example entry is `AllowUsers ps_test`. Restart `sshd` after changes.
+Keep the existing default shell: PurpleStrike works with either CMD or PowerShell.
+
+```dotenv
+PURPLESTRIKE_CONNECTION_METHOD=ssh
+PURPLESTRIKE_SSH_USERNAME=WORKSTATION\ps_test
+PURPLESTRIKE_SSH_PASSWORD=<standard-user-secret>
+PURPLESTRIKE_SSH_PORT=22
+PURPLESTRIKE_SSH_KNOWN_HOSTS=C:\path\to\verified_known_hosts
+# Optional instead of a password; JSON array of controller-side private key paths:
+PURPLESTRIKE_SSH_CLIENT_KEYS=[]
+```
+
+For standard-user public-key authentication, install the public key in the target
+user's `.ssh\authorized_keys`; administrators use the separate file configured by
+OpenSSH. Verify the server host key against the target's
+`%ProgramData%\ssh\ssh_host_ed25519_key.pub` through a trusted channel before adding
+it to `known_hosts`. Empty `SSH_KNOWN_HOSTS` uses the standard OpenSSH known-hosts
+locations. Explicit `none` disables verification for an isolated lab only; host-key
+verification is now enabled by default for both Windows and Linux SSH.
+
+Windows scripts are sent through stdin to a small encoded bootstrap, preserving
+Unicode, quoting, and large scripts without changing sshd's default shell. SSH
+requests termination on timeout; server support determines whether descendants
+also terminate. An interactive desktop session is not created.
+
+### WMI over DCOM: target setup
+
+1. Ensure the Windows Management Instrumentation (`Winmgmt`) and Server
+   (`LanmanServer`) services are running.
+2. Allow TCP 135 (RPC endpoint mapper), the negotiated WMI RPC ports (normally
+   dynamic), and TCP 445 (SMB) **from the controller**. Use the Windows WMI firewall
+   rules or a service-scoped RPC rule; opening port 135 alone is insufficient.
+3. For a standard account, add it to **Distributed COM Users**. In `dcomcnfg`,
+   verify effective Remote Access, Remote Launch, and Remote Activation permissions
+   in the machine limits and applicable defaults. Hardened domain policy may
+   override local group delegation; do not replace the machine-wide ACL wholesale.
+4. In `wmimgmt.msc`, open **WMI Control (Local) > Properties > Security >
+   Root > CIMV2 > Security**. Grant the account **Enable Account**, **Execute
+   Methods**, and **Remote Enable** on this namespace. Read/query access alone does
+   not authorize process creation.
+5. Provide a dedicated folder/share with NTFS Modify and SMB Change for this
+   account. Use the share/local-path pair below so output collection does not need
+   `ADMIN$` access:
+
+```powershell
+$account = "$env:COMPUTERNAME\ps_test"
+$path = 'C:\ProgramData\PurpleStrike\Transport'
+New-Item -ItemType Directory -Path $path -Force
+icacls.exe $path /grant "${account}:(OI)(CI)M"
+New-SmbShare -Name 'PurpleStrikeTransport$' -Path $path -ChangeAccess $account
+Add-LocalGroupMember -SID 'S-1-5-32-562' -Member $account
+```
+
+```dotenv
+PURPLESTRIKE_CONNECTION_METHOD=wmi
+PURPLESTRIKE_WMI_USERNAME=WORKSTATION\ps_test
+PURPLESTRIKE_WMI_PASSWORD=<standard-user-secret>
+PURPLESTRIKE_WMI_DOMAIN=WORKSTATION
+PURPLESTRIKE_WMI_SHARE=PurpleStrikeTransport$
+PURPLESTRIKE_WMI_SHARE_PATH=.
+PURPLESTRIKE_WMI_REMOTE_PATH=C:\ProgramData\PurpleStrike\Transport
+```
+
+The default admin pair is `ADMIN$`, `Temp`, `C:\Windows\Temp`. The configured
+share subdirectory and absolute target path must refer to the **same directory**.
+WMI mode currently requires password credentials and a Windows controller; SSH and
+WinRM remain available from other supported controller platforms. No Impacket
+installation is needed.
+The controller runs a temporary, static Windows PowerShell worker file; its
+execution policy/application-control policy must permit that trusted script.
+Credentials are passed over stdin, not written into the file or process arguments.
+The backend does not change execution policy. Enterprise signing or application
+control can require an approved deployment of the worker. Target commands remain
+subject to application control and the account's effective privileges.
+
+Each command creates an unpredictable `purplestrike_<uuid>` subdirectory. A target
+wrapper captures stdout, stderr, and the actual child exit code, enforces the child
+timeout, then publishes a completion record. Normal completion removes only this
+job's files and empty directory. A lost connection or local worker timeout can
+leave artifacts and an unknown remote result; the error identifies the owned
+directory. Inspect that exact directory and process state before cleanup or retry.
+Submitted commands are never automatically retried. WMI child timeouts request
+termination of the owned process tree; a controller timeout does not prove that
+remote execution stopped.
+
+### Reusable target setup and connection validation
+
+For a dedicated lab, [scripts/setup_windows_transports.ps1](scripts/setup_windows_transports.ps1)
+combines standard-user creation, group membership, WinRM delegation, CIMV2 method
+permissions, a dedicated SMB share, and controller-scoped firewall rules. It
+refuses to modify an unrelated existing account. Run it **on the target** as admin:
+
+```powershell
+$credential = Get-Credential -UserName 'ps_test'
+.\scripts\setup_windows_transports.ps1 -TestCredential $credential `
+    -ControllerAddress '192.0.2.20' -InstallSsh
+```
+
+Omit `-InstallSsh` if OpenSSH is already managed by your enterprise. The script
+prints the resulting account/share settings and saves an ACL snapshot under
+`%ProgramData%\PurpleStrike`. Setup changes remain in place for subsequent tests;
+they are not automatically undone by the connection checker. Revoke the dedicated
+account's WinRM/WMI ACEs, remove its account/share access and the named
+`PurpleStrike-Test-*` firewall rules when retiring the lab. Do not restore an old
+whole-machine ACL snapshot over unrelated changes made since provisioning.
+The helper refuses pre-existing transport folders/shares without its ownership
+record and does not broaden machine-wide DCOM permissions. An existing broad
+firewall rule can still allow other sources; adding a scoped rule does not narrow
+that existing rule. Review the effective firewall and domain policies separately.
+
+From the controller's `code` directory:
+
+```powershell
+uv sync --extra ssh --extra dev --inexact
+uv run --inexact purplestrike connections check --method all `
+    --output results/connections.json
+# Check one configured host/mode without changing normal run configuration:
+uv run --inexact purplestrike connections check --target 192.0.2.10 --method winrm_nonadmin
+```
+
+The checker uses only configured hosts. It tests connection and effective
+identity, long/Unicode PowerShell input, a uniquely named temporary file with
+cleanup, explicit and native exit codes, and a bounded sleep timeout. It does not
+run ATT&CK techniques or query the SIEM. JSON reports contain no passwords and the
+command exits nonzero if any check fails. A successful connection check establishes
+transport behavior, not permission to execute every technique or detection coverage.
+
+| Failure | What to check |
+|---|---|
+| Non-admin WinRM access denied | Account/group SID, WinRM resource ACL and deny policies; use `winrm_nonadmin` for WinRS no-profile behavior |
+| Non-admin mode rejects account | Its token contains local Administrators membership; use an actual standard user |
+| SSH host key rejected | Verify/pin the actual host key; do not silently accept an unexpected replacement |
+| SSH connection refused | OpenSSH Server installation/service, configured port, firewall |
+| WMI RPC server unavailable | TCP 135 **and** negotiated dynamic RPC connectivity; WMI service and DCOM policy |
+| WMI access denied | DCOM permissions, CIMV2 Execute Methods/Remote Enable, account logon restrictions |
+| SMB access denied / error 1219 | Share + NTFS rights; conflicting existing SMB credentials to the same server |
+| WMI connects but command fails | Matching share/local directory, script/application-control policy, child stderr/exit code |
+| A privileged technique fails through every mode | Actual technique prerequisites and token privileges; changing transports does not grant elevation |
+
+References: [WinRS non-admin/profile behavior](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/winrs),
+[OpenSSH server setup](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh_install_firstuse),
+[OpenSSH access configuration](https://learn.microsoft.com/en-us/windows-server/administration/openssh/openssh-server-configuration),
+[WMI remote process permissions](https://learn.microsoft.com/en-us/windows/win32/wmisdk/creating-processes-remotely),
+[WMI/DCOM security](https://learn.microsoft.com/en-us/windows/win32/wmisdk/securing-a-remote-wmi-connection),
+[PowerShell execution policy](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_execution_policies?view=powershell-5.1),
+[pywinrm transport implementation](https://github.com/diyan/pywinrm/blob/master/winrm/transport.py).
+
+### Validation against the configured lab host (2026-10-06)
+
+Local verification: **275 tests passed**, including real Windows PowerShell child
+process checks for Unicode, explicit/native failures and WMI timeout termination.
+The changed Python modules pass Ruff lint, and the target setup script passes the
+Windows PowerShell parser. These checks do not substitute for live SSH/DCOM testing.
+
+Target: `10.10.1.107` (`DESKTOP-54IL91M`). Live checks used the existing `.env`
+admin account and the authorized new standard account
+`DESKTOP-54IL91M\ps_conn_4abea9`. Its generated credentials are stored only in the
+ignored local `.env` under the non-admin WinRM, SSH, and WMI credential settings.
+The common admin credentials and default `auto` selection remain unchanged.
+
+| Mode | Observed live result |
+|---|---|
+| Admin WinRM | Connected; confirmed administrator identity, long/Unicode output and explicit exit code. Initial native-exit and timeout checks exposed defects that were corrected; final live rerun blocked by loss of connectivity. |
+| Delegated non-admin WinRM | Connected as the new local account; confirmed `administrator=false`, long/Unicode output and explicit exit code. Final live rerun blocked by loss of connectivity. |
+| Windows SSH | Live connection attempted but not validated. OpenSSH Server was absent; feature installation through WinRM returned Access Denied. Target-local installation and host-key pinning remain required. |
+| WMI/DCOM + SMB | Namespace/share delegation completed. Live connection attempted but not validated; the native worker reports RPC server unavailable. |
+
+The target subsequently stopped responding to WinRM, SSH, RPC and SMB probes.
+The final all-mode attempt is saved locally in
+`results/connections_20261006_final.json`; it records failures, not successful
+end-to-end validation. Rerun `connections check --method all` once the target is
+reachable and OpenSSH is installed. No ATT&CK attack procedures were run during
+these connection checks.
+
+Provisioning already performed on this host: a standard local account, membership
+in Users/Remote Management Users/Distributed COM Users, a WinRM SID-specific
+Read/Execute ACE, CIMV2 Enable/Execute Methods/Remote Enable rights, the dedicated
+`PurpleStrikeTransport$` share at `C:\ProgramData\PurpleStrike\Transport`, and
+`PurpleStrike-Test-*` firewall rules scoped to the observed controller address
+`192.169.50.10`. The account was **not** added to Administrators. The provisioning
+record is `results/connection_setup_20261006.json`. The target ACL snapshot is
+`C:\ProgramData\PurpleStrike\transport-setup-S-1-5-21-3078035323-2162789189-220950864-1015.json`.
+This first provisioning run preceded the helper's ownership-marker safeguard;
+review that existing setup manually before rerunning the helper on this host.
+The snapshot was taken during iterative setup and must not be treated as a full
+pre-change rollback image. Revoke only this test account's additions when retiring it.
+
+## Existing admin WinRM setup (workgroup lab, IP-based NTLM)
+
+This is the existing elevated-account recipe. Use the delegated setup above for
+standard-user tests; do not apply the local-admin UAC setting to non-admin accounts.
 
 This guide documents a working WinRM configuration for Windows 10/11 targets using:
 
 - WinRM over HTTP (5985)
 - NTLM authentication (Negotiate)
 - IP-based targeting (no DNS required)
-- TrustedHosts (required for NTLM over IP)
+- TrustedHosts for native Windows WSMan clients using HTTP/IP targeting
 - No Kerberos, no CredSSP, no domain required
 
 ---
@@ -166,7 +537,7 @@ If missing, re-run `winrm quickconfig`.
 #### 3. Enable NTLM authentication
 
 ```powershell
-winrm set winrm/config/service/auth '@{Kerberos="false"; Basic="false"; Negotiate="true"; CredSSP="false"}'
+winrm set winrm/config/service/auth '@{Negotiate="true"}'
 ```
 
 #### 4. Allow local account remote access (IMPORTANT for workgroup setups)
@@ -193,7 +564,11 @@ Restart-Service WinRM
 
 Run in **elevated PowerShell** on the PurpleStrike client machine.
 
-#### 1. Configure TrustedHosts (required for IP-based connections)
+#### 1. Configure TrustedHosts (native Windows WSMan clients)
+
+This setting applies to commands such as `Enter-PSSession` below. PurpleStrike's
+Python/pywinrm client does not use the Windows client's TrustedHosts list. Keep
+Kerberos enabled in domain environments; NTLM testing does not require disabling it.
 
 ```powershell
 Set-Item WSMan:\localhost\Client\TrustedHosts -Value "10.10.1.107" -Force
@@ -514,7 +889,7 @@ PurpleStrike uses a **plugin-based modular architecture** with four plugin types
 
 | Plugin | Purpose | Built-in Implementations |
 |---|---|---|
-| **Attack Executor** | Execute techniques on target systems | Custom Python (SSH/WinRM) |
+| **Attack Executor** | Execute techniques on target systems | Custom Python (SSH, WinRM, delegated WinRM, WMI/DCOM + SMB) |
 | **SIEM Connector** | Query alerts and rules from SIEM | Wazuh |
 | **LLM Provider** | Power agent reasoning and alert correlation | OpenAI, DeepSeek, Anthropic, Ollama, vLLM |
 | **Report Formatter** | Generate output reports | JSON, CSV |

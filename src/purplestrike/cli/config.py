@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import typer
@@ -96,6 +97,12 @@ def show() -> None:
     table.add_row("Remote Login Domain", config.target_ad_domain or "(not set)")
     table.add_row("Remote Login Username", config.target_username or "(not set)")
     table.add_row("Remote Login Password", "***" if config.target_password else "(not set)")
+    table.add_row("Connection Method", config.connection.method.value)
+    table.add_row("SSH Port", str(config.connection.ssh_port))
+    table.add_row(
+        "SSH Host Verification", config.connection.ssh_known_hosts or "OpenSSH known_hosts"
+    )
+    table.add_row("WMI Output Share", config.connection.wmi_share)
 
     if config.target_groups:
         table.add_row("Target Groups", ", ".join(config.target_groups.keys()))
@@ -147,8 +154,20 @@ def validate_config() -> None:
         issues.append("SIEM API URL not configured (set PURPLESTRIKE_WAZUH_API_URL)")
     if not config.siem.api_user:
         issues.append("Wazuh Dashboard user not configured (set PURPLESTRIKE_WAZUH_API_USER)")
-    if not config.target_password:
-        issues.append("Remote login password not configured (set PURPLESTRIKE_TARGET_PASSWORD)")
+    # Passwords are optional for SSH keys and WinRM Kerberos ticket authentication.
+    # Mode-specific usernames can replace the common login completely.
+    if not config.target_username:
+        methods = {
+            (host.connection_method or config.connection.method).value
+            if (host.connection_method or config.connection.method) != "auto"
+            else ("winrm" if host.os == "windows" else "ssh")
+            for group in config.target_groups.values()
+            for host in group.hosts
+        } or {"winrm" if config.connection.method == "auto" else config.connection.method.value}
+        for method in sorted(methods):
+            key = f"{method.upper()}_USERNAME"
+            if not (os.environ.get(f"PURPLESTRIKE_{key}") or os.environ.get(key)):
+                issues.append(f"Remote login username not configured for {method}")
 
     if issues:
         console.print("[red]Configuration issues:[/red]")

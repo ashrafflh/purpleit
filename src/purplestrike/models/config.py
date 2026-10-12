@@ -5,9 +5,9 @@ import os
 from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AssetType(StrEnum):
@@ -20,6 +20,29 @@ class AssetType(StrEnum):
 class OSType(StrEnum):
     WINDOWS = "windows"
     LINUX = "linux"
+
+
+class ConnectionMethod(StrEnum):
+    AUTO = "auto"
+    WINRM = "winrm"
+    WINRM_NONADMIN = "winrm_nonadmin"
+    SSH = "ssh"
+    WMI = "wmi"
+
+
+class ConnectionSettings(BaseModel):
+    model_config = ConfigDict(validate_assignment=True)
+    method: ConnectionMethod = ConnectionMethod.AUTO
+    connect_timeout: int = Field(default=15, ge=1, le=120)
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    # Empty uses OpenSSH known_hosts; "none" explicitly disables verification for a lab.
+    ssh_known_hosts: str = ""
+    ssh_client_keys: list[str] = Field(default_factory=list)
+    winrm_endpoint: str = ""
+    winrm_cert_validation: Literal["validate", "ignore"] = "ignore"
+    wmi_share: str = "ADMIN$"
+    wmi_share_path: str = "Temp"
+    wmi_remote_path: str = r"C:\Windows\Temp"
 
 
 ASSET_MULTIPLIERS: dict[AssetType, float] = {
@@ -56,6 +79,7 @@ class TargetHost(BaseModel):
     asset_type: AssetType = AssetType.WORKSTATION
     domain: str | None = None
     services: list[str] = Field(default_factory=list)
+    connection_method: ConnectionMethod | None = None
 
     @property
     def asset_multiplier(self) -> float:
@@ -124,6 +148,7 @@ class PurpleStrikeConfig(BaseModel):
     target_ad_domain: str = ""
     target_username: str = ""
     target_password: str = ""
+    connection: ConnectionSettings = Field(default_factory=ConnectionSettings)
 
     @classmethod
     def from_yaml(cls, path: Path) -> PurpleStrikeConfig:
@@ -198,6 +223,16 @@ class PurpleStrikeConfig(BaseModel):
             "PURPLESTRIKE_TARGET_USERNAME": (["target_username"], str),
             "PURPLESTRIKE_TARGET_PASSWORD": (["target_password"], str),
             "PURPLESTRIKE_TARGET_GROUPS": (["target_groups"], json.loads),
+            "PURPLESTRIKE_CONNECTION_METHOD": (["connection", "method"], str),
+            "PURPLESTRIKE_CONNECT_TIMEOUT": (["connection", "connect_timeout"], int),
+            "PURPLESTRIKE_SSH_PORT": (["connection", "ssh_port"], int),
+            "PURPLESTRIKE_SSH_KNOWN_HOSTS": (["connection", "ssh_known_hosts"], str),
+            "PURPLESTRIKE_SSH_CLIENT_KEYS": (["connection", "ssh_client_keys"], json.loads),
+            "PURPLESTRIKE_WINRM_ENDPOINT": (["connection", "winrm_endpoint"], str),
+            "PURPLESTRIKE_WINRM_CERT_VALIDATION": (["connection", "winrm_cert_validation"], str),
+            "PURPLESTRIKE_WMI_SHARE": (["connection", "wmi_share"], str),
+            "PURPLESTRIKE_WMI_SHARE_PATH": (["connection", "wmi_share_path"], str),
+            "PURPLESTRIKE_WMI_REMOTE_PATH": (["connection", "wmi_remote_path"], str),
         }
 
         for env_name, (keys, cast) in env_overrides.items():

@@ -5,15 +5,21 @@ import base64
 import logging
 import os
 import re
+import shlex
 import time
+from pathlib import Path
 from types import SimpleNamespace
-from xml.etree import ElementTree
 from typing import Any
+from xml.etree import ElementTree
+
+from purplestrike.models.config import ConnectionMethod, ConnectionSettings, PurpleStrikeConfig
 
 logger = logging.getLogger(__name__)
 
 _target_credentials: dict[str, str] = {}
 _target_platforms: dict[str, str] = {}
+_connection_settings: ConnectionSettings | None = None
+_target_methods: dict[str, ConnectionMethod] = {}
 _WINRM_MAX_ATTEMPTS = 3
 _WINRM_TRANSIENT_MARKERS = (
     "connecttimeouterror",
@@ -27,16 +33,14 @@ _WINRM_TRANSIENT_MARKERS = (
 )
 
 
-def set_target_credentials(
-    domain: str = "", username: str = "", password: str = ""
-) -> None:
+def set_target_credentials(domain: str = "", username: str = "", password: str = "") -> None:
     """Set target credentials to be used by TargetConnection."""
     _target_credentials["TARGET_AD_DOMAIN"] = domain
     _target_credentials["TARGET_USERNAME"] = username
     _target_credentials["TARGET_PASSWORD"] = password
 
 
-class ConnectionError(Exception):
+class ConnectionError(Exception):  # noqa: A001 - retain the public exception API
     pass
 
 
@@ -45,7 +49,7 @@ class _SubmittedCommandError(Exception):
 
 
 class CommandResult:
-    __slots__ = ("stdout", "stderr", "exit_code", "success")
+    __slots__ = ("exit_code", "stderr", "stdout", "success")
 
     def __init__(self, stdout: str, stderr: str, exit_code: int) -> None:
         self.stdout = stdout
@@ -61,7 +65,7 @@ class CommandResult:
 
 
 def _get_credential(key: str, default: str = "") -> str:
-    if key in _target_credentials and _target_credentials[key]:
+    if _target_credentials.get(key):
         return _target_credentials[key]
     val = os.environ.get(f"PURPLESTRIKE_{key}", default)
     if not val:
@@ -74,19 +78,52 @@ def _decode_powershell_errors(stderr: str) -> str:
         return stderr
     try:
         root = ElementTree.fromstring(stderr.split("\n", 1)[1])
-        errors = [element.text or "" for element in root.iter()
-                  if element.get("S", "").lower() == "error"]
+        errors = [
+            element.text or "" for element in root.iter() if element.get("S", "").lower() == "error"
+        ]
         return re.sub(r"_x([0-9A-Fa-f]{4})_", lambda m: chr(int(m[1], 16)), "".join(errors))
     except (ElementTree.ParseError, IndexError):
         return stderr
 
 
 def _redact_target_password(text: str) -> str:
-    password = _get_credential("TARGET_PASSWORD", "")
-    if password:
-        text = text.replace(password.replace("'", "''"), "[REDACTED]")
-        text = text.replace(password, "[REDACTED]")
+    for key in (
+        "TARGET_PASSWORD",
+        "WINRM_PASSWORD",
+        "WINRM_NONADMIN_PASSWORD",
+        "SSH_PASSWORD",
+        "WMI_PASSWORD",
+    ):
+        password = _get_credential(key, "")
+        if password:
+            text = text.replace(password.replace("'", "''"), "[REDACTED]")
+            text = text.replace(password, "[REDACTED]")
     return text
+
+
+def set_connection_settings(
+    settings: ConnectionSettings,
+    methods: dict[str, ConnectionMethod] | None = None,
+) -> None:
+    global _connection_settings
+    _connection_settings = settings.model_copy(deep=True)
+    _target_methods.clear()
+    _target_methods.update(methods or {})
+
+
+def _powershell_script(script: str, cwd: str | None = None) -> str:
+    prefix = (
+        "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; "
+        "[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); "
+        "$global:LASTEXITCODE = 0;\n"
+    )
+    if cwd:
+        prefix += "Set-Location -LiteralPath '" + cwd.replace("'", "''") + "';\n"
+    return (
+        prefix + script + "\n$__purpleSuccess = $?; "
+        "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; "
+        "if (-not $__purpleSuccess) { exit 1 }"
+    )
 
 
 def _get_winrm_transport(password: str) -> str:
@@ -99,7 +136,9 @@ def _get_winrm_transport(password: str) -> str:
 def _target_os(target: str) -> str:
     if target in _target_platforms:
         return _target_platforms[target]
-    if any(indicator in target.lower() for indicator in ("linux", "lnx", "ubuntu", "centos", "rhel")):
+    if any(
+        indicator in target.lower() for indicator in ("linux", "lnx", "ubuntu", "centos", "rhel")
+    ):
         return "linux"
     return "windows"
 
@@ -120,7 +159,12 @@ def _is_transient_winrm_error(error: Exception) -> bool:
     return any(marker in message for marker in _WINRM_TRANSIENT_MARKERS)
 
 
-def _run_ps_with_deadline(session: Any, script: str, timeout: int) -> Any:
+def _run_ps_with_deadline(
+    session: Any,
+    script: str,
+    timeout: int,
+    noprofile: bool = False,
+) -> Any:
     """Bound WinRM receive polling and always terminate/close our own remote shell."""
     from winrm.exceptions import WinRMOperationTimeoutError
 
@@ -129,12 +173,17 @@ def _run_ps_with_deadline(session: Any, script: str, timeout: int) -> Any:
     shell_id = None
     command_id = None
     submitted = False
+    original_operation_timeout = getattr(protocol, "operation_timeout_sec", None)
+    if original_operation_timeout is not None:
+        protocol.operation_timeout_sec = min(original_operation_timeout, max(1, timeout - 1))
     stdout: list[bytes] = []
     stderr: list[bytes] = []
     try:
-        shell_id = protocol.open_shell()
+        shell_id = protocol.open_shell(noprofile=True) if noprofile else protocol.open_shell()
         if time.monotonic() >= deadline:
-            return SimpleNamespace(std_out=b"", std_err=b"Remote shell creation timed out", status_code=124)
+            return SimpleNamespace(
+                std_out=b"", std_err=b"Remote shell creation timed out", status_code=124
+            )
         encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
         script_input = None
         if len(encoded) > 7000:
@@ -148,7 +197,9 @@ def _run_ps_with_deadline(session: Any, script: str, timeout: int) -> Any:
             encoded = base64.b64encode(bootstrap.encode("utf-16-le")).decode("ascii")
         submitted = True
         command_id = protocol.run_command(
-            shell_id, "powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            shell_id,
+            "powershell.exe",
+            ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
             skip_cmd_shell=True,
         )
         if script_input is not None:
@@ -162,11 +213,22 @@ def _run_ps_with_deadline(session: Any, script: str, timeout: int) -> Any:
                 stdout.append(out)
                 stderr.append(err)
                 if done:
-                    return SimpleNamespace(std_out=b"".join(stdout), std_err=b"".join(stderr), status_code=code)
+                    if time.monotonic() >= deadline:
+                        return SimpleNamespace(
+                            std_out=b"".join(stdout),
+                            std_err=b"Command completed after its deadline",
+                            status_code=124,
+                        )
+                    return SimpleNamespace(
+                        std_out=b"".join(stdout), std_err=b"".join(stderr), status_code=code
+                    )
             except WinRMOperationTimeoutError:
                 continue
-        return SimpleNamespace(std_out=b"".join(stdout),
-                               std_err=b"Remote command timed out; termination requested", status_code=124)
+        return SimpleNamespace(
+            std_out=b"".join(stdout),
+            std_err=b"Remote command timed out; termination requested",
+            status_code=124,
+        )
     except Exception as error:
         if submitted:
             raise _SubmittedCommandError(str(error)) from error
@@ -182,6 +244,8 @@ def _run_ps_with_deadline(session: Any, script: str, timeout: int) -> Any:
                 protocol.close_shell(shell_id)
             except Exception as error:
                 logger.warning("Failed to close WinRM shell %s: %s", shell_id, error)
+        if original_operation_timeout is not None:
+            protocol.operation_timeout_sec = original_operation_timeout
 
 
 def command_error(result: CommandResult, default: str = "Remote command failed") -> str:
@@ -196,13 +260,45 @@ def is_transport_failure(result: CommandResult) -> bool:
 
 
 class TargetConnection:
-    """Manages remote connections to target systems via SSH or WinRM."""
+    """Agentless execution with an explicit transport independent of the target OS."""
 
-    def __init__(self, target: str) -> None:
+    def __init__(
+        self,
+        target: str,
+        method: ConnectionMethod | str | None = None,
+        settings: ConnectionSettings | None = None,
+    ) -> None:
         self.target = target
         self._os_type = _target_os(target)
+        self.settings = settings or _connection_settings or PurpleStrikeConfig.from_env().connection
+        self.method = ConnectionMethod(
+            method or _target_methods.get(target) or self.settings.method
+        )
+        if self.method == ConnectionMethod.AUTO:
+            self.method = ConnectionMethod.WINRM if self.is_windows else ConnectionMethod.SSH
+        if not self.is_windows and self.method != ConnectionMethod.SSH:
+            raise ConnectionError(f"{self.method} requires a Windows target")
         self._ssh_conn: Any = None
         self._winrm_conn: Any = None
+        self._wmi_conn: Any = None
+
+    def _credentials(self) -> tuple[str, str, str]:
+        prefix = self.method.value.upper()
+        mode_username = _get_credential(f"{prefix}_USERNAME")
+        username = mode_username or _get_credential(
+            "TARGET_USERNAME",
+            "Administrator" if self.is_windows else "attack_user",
+        )
+        password = _get_credential(f"{prefix}_PASSWORD")
+        if not mode_username and not password:
+            password = _get_credential("TARGET_PASSWORD")
+        domain = _get_credential(f"{prefix}_DOMAIN") or _get_credential("TARGET_AD_DOMAIN")
+        return username, password, domain
+
+    def _qualified_username(self, username: str, domain: str) -> str:
+        if self.is_windows and domain and "\\" not in username and "@" not in username:
+            return f"{domain}\\{username}"
+        return username
 
     @property
     def os_type(self) -> str:
@@ -213,27 +309,57 @@ class TargetConnection:
         return self._os_type == "windows"
 
     async def connect(self) -> None:
-        if self._os_type == "linux":
+        if self.method == ConnectionMethod.SSH:
             await self._connect_ssh()
+        elif self.method == ConnectionMethod.WMI:
+            from purplestrike.techniques.wmi_connection import WmiConnection
+
+            self._wmi_conn = WmiConnection(self.target, self._credentials(), self.settings)
+            try:
+                await asyncio.to_thread(self._wmi_conn.connect)
+            except Exception as error:
+                await self.disconnect()
+                raise ConnectionError(_redact_target_password(str(error))) from None
         else:
             await self._connect_winrm()
+            if self.method == ConnectionMethod.WINRM_NONADMIN:
+                # Check the group SIDs, including deny-only Administrators membership.
+                # Selecting this mode never silently turns an admin token into a user token.
+                result = await self.run_ps(
+                    "$id = [Security.Principal.WindowsIdentity]::GetCurrent(); "
+                    "if (@($id.Groups | ForEach-Object { $_.Value }) -contains 'S-1-5-32-544') "
+                    "{ throw 'winrm_nonadmin requires an account outside local Administrators' }; "
+                    "Write-Output $id.Name",
+                    timeout=self.settings.connect_timeout,
+                )
+                if not result.success:
+                    await self.disconnect()
+                    raise ConnectionError(command_error(result))
 
     async def _connect_ssh(self) -> None:
         try:
             import asyncssh
 
-            username = _get_credential("TARGET_USERNAME", "attack_user")
-            password = _get_credential("TARGET_PASSWORD", "")
-            domain = _get_credential("TARGET_AD_DOMAIN", "")
-
-            if domain and "\\" not in username and "@" not in username:
-                username = f"{domain}\\{username}"
+            username, password, domain = self._credentials()
+            username = self._qualified_username(username, domain)
 
             kwargs: dict[str, Any] = {
                 "host": self.target,
                 "username": username,
-                "known_hosts": None,
+                "port": self.settings.ssh_port,
+                "connect_timeout": self.settings.connect_timeout,
+                "login_timeout": self.settings.connect_timeout,
             }
+            if self.settings.ssh_known_hosts:
+                kwargs["known_hosts"] = (
+                    None
+                    if self.settings.ssh_known_hosts == "none"
+                    else str(Path(self.settings.ssh_known_hosts).expanduser())
+                )
+            if self.settings.ssh_client_keys:
+                kwargs["client_keys"] = [
+                    str(Path(p).expanduser()) for p in self.settings.ssh_client_keys
+                ]
             if password:
                 kwargs["password"] = password
 
@@ -242,38 +368,39 @@ class TargetConnection:
         except ImportError:
             raise ConnectionError(
                 "asyncssh not installed. Install with: uv sync --extra ssh"
-            )
+            ) from None
         except Exception as e:
-            raise ConnectionError(f"SSH connection to {self.target} failed: {e}")
+            raise ConnectionError(
+                _redact_target_password(
+                    f"SSH connection to {self.target}:{self.settings.ssh_port} failed: "
+                    f"{str(e) or type(e).__name__}"
+                )
+            ) from None
 
     async def _connect_winrm(self) -> None:
         try:
             import winrm
 
-            username = _get_credential("TARGET_USERNAME", "Administrator")
-            password = _get_credential("TARGET_PASSWORD", "")
-            domain = _get_credential("TARGET_AD_DOMAIN", "")
-
-            if domain and "\\" not in username and "@" not in username:
-                username = f"{domain}\\{username}"
+            username, password, domain = self._credentials()
+            username = self._qualified_username(username, domain)
 
             transport = _get_winrm_transport(password)
 
             self._winrm_conn = winrm.Session(
-                self.target,
+                self.settings.winrm_endpoint.format(host=self.target) or self.target,
                 auth=(username, password),
                 transport=transport,
-                server_cert_validation="ignore",
-                operation_timeout_sec=10,
-                read_timeout_sec=60,
+                server_cert_validation=self.settings.winrm_cert_validation,
+                operation_timeout_sec=min(10, self.settings.connect_timeout),
+                read_timeout_sec=max(11, self.settings.connect_timeout + 1),
             )
             logger.info(f"WinRM connected to {self.target}")
         except ImportError:
-            raise ConnectionError(
-                "pywinrm not installed. Install with: uv sync"
-            )
+            raise ConnectionError("pywinrm not installed. Install with: uv sync") from None
         except Exception as e:
-            raise ConnectionError(f"WinRM connection to {self.target} failed: {e}")
+            raise ConnectionError(
+                _redact_target_password(f"WinRM connection to {self.target} failed: {e}")
+            ) from None
 
     async def run_command(
         self,
@@ -281,6 +408,10 @@ class TargetConnection:
         timeout: int = 60,
         cwd: str | None = None,
     ) -> CommandResult:
+        if self.is_windows:
+            if cwd:
+                command = "Set-Location -LiteralPath '" + cwd.replace("'", "''") + "';\n" + command
+            return await self.run_ps(command, timeout)
         if self._ssh_conn is not None:
             return await self._run_ssh(command, timeout, cwd)
         if self._winrm_conn is not None:
@@ -291,7 +422,7 @@ class TargetConnection:
         self, command: str, timeout: int = 60, cwd: str | None = None
     ) -> CommandResult:
         if cwd:
-            command = f"cd {cwd} && {command}"
+            command = f"cd {shlex.quote(cwd)} && {command}"
 
         try:
             result = await asyncio.wait_for(
@@ -299,20 +430,34 @@ class TargetConnection:
                 timeout=timeout,
             )
             return CommandResult(
-                stdout=result.stdout or "",
-                stderr=result.stderr or "",
+                stdout=_redact_target_password(result.stdout or ""),
+                stderr=_redact_target_password(result.stderr or ""),
                 exit_code=result.exit_status if result.exit_status is not None else 1,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return CommandResult(stdout="", stderr="Command timed out", exit_code=124)
 
     async def _run_winrm(self, command: str, timeout: int = 60) -> CommandResult:
         return await self._run_winrm_with_retries(command, timeout)
 
     async def run_ps(self, script: str, timeout: int = 60) -> CommandResult:
+        if self._wmi_conn is not None:
+            try:
+                stdout, stderr, code = await asyncio.to_thread(
+                    self._wmi_conn.run_ps,
+                    _powershell_script(script),
+                    timeout,
+                )
+                return CommandResult(
+                    _redact_target_password(stdout), _redact_target_password(stderr), code
+                )
+            except Exception as error:
+                return CommandResult("", _redact_target_password(str(error)), 1)
         if self._winrm_conn is not None:
             return await self._run_winrm_ps(script, timeout)
         if self._ssh_conn is not None:
+            if self.is_windows:
+                return await self._run_windows_ssh_ps(_powershell_script(script), timeout)
             escaped = script.replace("'", "'\\''")
             return await self._run_ssh(
                 f"powershell -NoProfile -NonInteractive -Command '{escaped}'",
@@ -320,15 +465,40 @@ class TargetConnection:
             )
         raise ConnectionError(f"Not connected to {self.target}")
 
+    async def _run_windows_ssh_ps(self, script: str, timeout: int) -> CommandResult:
+        # Stream the body through stdin; a small encoded bootstrap works with both
+        # cmd.exe and PowerShell as sshd's default shell, including long/Unicode scripts.
+        encoded_script = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+        bootstrap = (
+            "[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); "
+            "$s=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String("
+            "[Console]::In.ReadToEnd())); & ([scriptblock]::Create($s))"
+        )
+        encoded = base64.b64encode(bootstrap.encode("utf-16-le")).decode("ascii")
+        process = await self._ssh_conn.create_process(
+            f"powershell.exe -NoProfile -NonInteractive -EncodedCommand {encoded}",
+            encoding="utf-8",
+        )
+        try:
+            process.stdin.write(encoded_script)
+            process.stdin.write_eof()
+            result = await asyncio.wait_for(process.wait(), timeout)
+            return CommandResult(
+                _redact_target_password(result.stdout or ""),
+                _redact_target_password(result.stderr or ""),
+                result.exit_status if result.exit_status is not None else 1,
+            )
+        except TimeoutError:
+            process.kill()
+            return CommandResult("", "SSH command timed out; termination requested", 124)
+        finally:
+            process.close()
+
     async def _run_winrm_ps(self, script: str, timeout: int = 60) -> CommandResult:
         return await self._run_winrm_with_retries(script, timeout)
 
     async def _run_winrm_with_retries(self, script: str, timeout: int) -> CommandResult:
-        script = (
-            "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue'; "
-            "$global:LASTEXITCODE = 0;\n" + script + "\n"
-            "if (-not $?) { exit 1 }; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }"
-        )
+        script = _powershell_script(script)
         last_error: Exception | None = None
         session = self._winrm_conn
         for attempt in range(1, _WINRM_MAX_ATTEMPTS + 1):
@@ -337,11 +507,18 @@ class TargetConnection:
                     # The worker enforces its deadline and cleans up before returning.
                     # Cancelling only an asyncio future leaves pywinrm polling forever.
                     result = await asyncio.get_running_loop().run_in_executor(
-                        None, _run_ps_with_deadline, session, script, timeout
+                        None,
+                        _run_ps_with_deadline,
+                        session,
+                        script,
+                        timeout,
+                        self.method == ConnectionMethod.WINRM_NONADMIN,
                     )
                 else:
                     result = await asyncio.wait_for(
-                        asyncio.get_running_loop().run_in_executor(None, lambda: session.run_ps(script)),
+                        asyncio.get_running_loop().run_in_executor(
+                            None, lambda: session.run_ps(script)
+                        ),
                         timeout=timeout,
                     )
                 return CommandResult(
@@ -353,7 +530,7 @@ class TargetConnection:
                     ),
                     exit_code=result.status_code if result.status_code is not None else 1,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # A timed-out remote command may still be running; do not execute it twice.
                 return CommandResult(stdout="", stderr="Remote command timed out", exit_code=124)
             except Exception as e:
@@ -368,18 +545,21 @@ class TargetConnection:
                     e,
                 )
                 await asyncio.sleep(2)
-        return CommandResult(stdout="", stderr=str(last_error), exit_code=1)
+        return CommandResult(
+            stdout="", stderr=_redact_target_password(str(last_error)), exit_code=1
+        )
 
     async def upload(self, local_path: str, remote_path: str) -> None:
         if self._ssh_conn is not None:
             async with self._ssh_conn.start_sftp_client() as sftp:
                 await sftp.put(local_path, remote_path)
         else:
-            content = open(local_path, "rb").read()
-            b64 = __import__("base64").b64encode(content).decode()
+            content = Path(local_path).read_bytes()
+            b64 = base64.b64encode(content).decode()
+            quoted_path = remote_path.replace("'", "''")
             script = (
                 f"$bytes = [Convert]::FromBase64String('{b64}'); "
-                f"[IO.File]::WriteAllBytes('{remote_path}', $bytes)"
+                f"[IO.File]::WriteAllBytes('{quoted_path}', $bytes)"
             )
             result = await self.run_ps(script)
             if not result.success:
@@ -390,19 +570,21 @@ class TargetConnection:
             async with self._ssh_conn.start_sftp_client() as sftp:
                 await sftp.get(remote_path, local_path)
         else:
+            quoted_path = remote_path.replace("'", "''")
             script = (
-                f"$bytes = [IO.File]::ReadAllBytes('{remote_path}'); "
+                f"$bytes = [IO.File]::ReadAllBytes('{quoted_path}'); "
                 f"[Convert]::ToBase64String($bytes)"
             )
             result = await self.run_ps(script)
-            if result.success and result.stdout.strip():
-                import base64
-
-                data = base64.b64decode(result.stdout.strip())
-                with open(local_path, "wb") as f:
-                    f.write(data)
+            if not result.success:
+                raise ConnectionError(f"Download failed: {result.stderr}")
+            data = base64.b64decode(result.stdout.strip(), validate=True)
+            Path(local_path).write_bytes(data)
 
     async def disconnect(self) -> None:
+        if self._wmi_conn is not None:
+            await asyncio.to_thread(self._wmi_conn.disconnect)
+            self._wmi_conn = None
         if self._ssh_conn is not None:
             self._ssh_conn.close()
             await self._ssh_conn.wait_closed()
