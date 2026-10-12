@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import AsyncMock
 
 from purplestrike.core.agent_loop import AgentLoop
 from purplestrike.models.config import (
@@ -89,3 +90,15 @@ def test_available_techniques_match_primary_target_os() -> None:
     )
 
     assert [technique.technique_id for technique in techniques] == ["T1059.001"]
+
+
+async def test_agent_rejects_plan_outside_requested_mcp_selection() -> None:
+    agent = _agent()
+    agent.technique_registry = technique_registry
+    agent.llm_provider = AsyncMock()
+    agent.llm_provider.complete.return_value = json.dumps(
+        {
+            "steps": [{"technique_id": "T1047"}],
+        }
+    )
+    assert await agent.generate_plan(technique_ids=["T1059.001"]) is None

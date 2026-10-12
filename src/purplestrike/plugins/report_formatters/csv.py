@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,13 @@ class CsvFormatter:
             "loss_magnitude",
             "annualized_loss_expectancy",
             "risk_level",
+            "plan_step",
+            "attempt",
+            "tool_name",
+            "parameters",
+            "tool_detection_metadata",
+            "cleanup_error",
+            "decision",
         ]
 
         with open(path, "w", newline="") as f:
@@ -80,6 +88,13 @@ class CsvFormatter:
                         f"{risk.loss_magnitude:.0f}",
                         f"{risk.annualized_loss_expectancy:.0f}",
                         risk.risk_level,
+                        step.plan_step,
+                        step.attempt,
+                        step.tool_name,
+                        json.dumps(step.parameters),
+                        json.dumps(step.tool_detection_metadata),
+                        step.cleanup_error or "",
+                        json.dumps(step.decision),
                     ]
                 )
 

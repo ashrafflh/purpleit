@@ -11,6 +11,7 @@ from purplestrike.models.simulation import (
     DetectionStatus,
     SIEMAlert,
 )
+from purplestrike.observability import AuditLogger
 from purplestrike.plugins.protocols import SIEMConnector
 
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class DetectionValidationEngine:
         self.siem_connector = siem_connector
         self.plugin_registry = plugin_registry
         self.config = config or PurpleStrikeConfig()
+        self.audit = AuditLogger(logger, self.config)
 
     async def validate_step(
         self,
@@ -49,13 +51,24 @@ class DetectionValidationEngine:
                 technique_id,
                 expected_rules,
             )
-            alerts = await self.siem_connector.query_alerts(
+            self.audit.event(
+                "detection.query.started",
+                technique_id=technique_id,
+                target=target,
+                event_window_start=start_time,
+                event_window_end=end_time,
+                query_start=start_time - skew,
+                query_end=end_time + skew,
+                expected_rules=effective_rules,
+            )
+            queried_alerts = await self.siem_connector.query_alerts(
                 start_time=start_time - skew,
                 end_time=end_time + skew,
                 source=target,
             )
             alerts = [
-                alert for alert in alerts if self._within_event_window(alert, start_time, end_time)
+                alert for alert in queried_alerts
+                if self._within_event_window(alert, start_time, end_time)
             ]
         except Exception as e:
             logger.error(f"SIEM query failed: {e}")
@@ -72,10 +85,34 @@ class DetectionValidationEngine:
             for alert in alerts
         ]
         alerts, excluded = self._detection_candidates(alerts)
+        self.audit.event(
+            "detection.query.result",
+            technique_id=technique_id,
+            target=target,
+            returned_count=len(queried_alerts),
+            outside_event_window_count=len(queried_alerts) - len(alerts) - len(excluded),
+            routine_auth_count=len(excluded),
+            candidate_count=len(alerts),
+            alert_timing=[
+                {
+                    "alert_id": alert.alert_id,
+                    "rule_id": alert.rule_id,
+                    "manager_timestamp": alert.timestamp,
+                    "event_timestamp": alert.raw_log.get("data", {})
+                    .get("win", {}).get("system", {}).get("systemTime"),
+                }
+                for alert in queried_alerts
+            ],
+        )
         if not alerts:
             return DetectionResult(
                 status=DetectionStatus.NOT_DETECTED, confidence=0.0,
                 excluded_alerts=excluded,
+                ai_correlation_reasoning=(
+                    f"No eligible detection alerts: SIEM returned {len(queried_alerts)}; "
+                    f"{len(queried_alerts) - len(excluded)} outside the event window; "
+                    f"{len(excluded)} routine authentication events excluded."
+                ),
             )
 
         matched_rules, matched_alerts = self._rule_based_check(

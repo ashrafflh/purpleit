@@ -197,14 +197,24 @@ class WazuhConnector:
         if self._dashboard_client is None:
             raise RuntimeError("Wazuh Dashboard client is not initialized")
 
+        time_range = {
+            "gte": start_time.isoformat(),
+            "lte": end_time.isoformat(),
+            "format": "strict_date_optional_time",
+        }
+        # Manager and endpoint clocks can differ by more than the small query
+        # padding. Retrieve Windows events by their occurrence time as well so
+        # short steps do not disappear before validation sees their alerts.
+        # The validation engine still enforces the exact event-time window,
+        # excluding delayed events from earlier steps and cleanup.
         filters: list[dict[str, Any]] = [
             {
-                "range": {
-                    "timestamp": {
-                        "gte": start_time.isoformat(),
-                        "lte": end_time.isoformat(),
-                        "format": "strict_date_optional_time",
-                    }
+                "bool": {
+                    "should": [
+                        {"range": {"timestamp": time_range}},
+                        {"range": {"data.win.system.systemTime": time_range}},
+                    ],
+                    "minimum_should_match": 1,
                 }
             }
         ]

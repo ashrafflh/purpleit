@@ -136,19 +136,41 @@ class RiskParameters(BaseModel):
     loss_magnitudes: dict[str, float] = Field(default_factory=dict)
 
 
+class MCPServerConfig(BaseModel):
+    transport: Literal["stdio", "streamable_http"] = "stdio"
+    command: str = ""
+    args: list[str] = Field(default_factory=list)
+    env: dict[str, str] = Field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class MCPConfig(BaseModel):
+    # An empty mapping starts the bundled executor server over stdio.
+    servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=180, gt=0)
+
+
+class ExecutionConfig(BaseModel):
+    max_retries_per_step: int = Field(default=2, ge=0, le=10)
+    decision_timeout_seconds: float = Field(default=90, gt=0)
+
+
 class PurpleStrikeConfig(BaseModel):
     target_groups: dict[str, TargetGroup] = Field(default_factory=dict)
     siem: SIEMConfig = Field(default_factory=SIEMConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     risk: RiskParameters = Field(default_factory=RiskParameters)
     db_path: str = ""
-    detection_check_delay: int = 30
-    max_steps: int = 20
+    detection_check_delay: int = Field(default=30, ge=0)
+    max_steps: int = Field(default=20, ge=1)
     output_dir: str = "./results"
     target_ad_domain: str = ""
     target_username: str = ""
     target_password: str = ""
     connection: ConnectionSettings = Field(default_factory=ConnectionSettings)
+    mcp: MCPConfig = Field(default_factory=MCPConfig)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
 
     @classmethod
     def from_yaml(cls, path: Path) -> PurpleStrikeConfig:
@@ -218,6 +240,9 @@ class PurpleStrikeConfig(BaseModel):
             "PURPLESTRIKE_DB_PATH": (["db_path"], str),
             "PURPLESTRIKE_DETECTION_CHECK_DELAY": (["detection_check_delay"], int),
             "PURPLESTRIKE_MAX_STEPS": (["max_steps"], int),
+            "PURPLESTRIKE_MCP_SERVERS": (["mcp", "servers"], json.loads),
+            "PURPLESTRIKE_MCP_TIMEOUT": (["mcp", "timeout_seconds"], float),
+            "PURPLESTRIKE_MAX_RETRIES": (["execution", "max_retries_per_step"], int),
             "PURPLESTRIKE_OUTPUT_DIR": (["output_dir"], str),
             "PURPLESTRIKE_TARGET_AD_DOMAIN": (["target_ad_domain"], str),
             "PURPLESTRIKE_TARGET_USERNAME": (["target_username"], str),

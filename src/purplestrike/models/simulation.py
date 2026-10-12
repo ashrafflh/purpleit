@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -88,6 +89,7 @@ class SimulationStatus(StrEnum):
     PARTIAL = "partial"
     ABORTED = "aborted"
     FAILED = "failed"
+    PAUSED = "paused"
 
 
 class SimulationStep(BaseModel):
@@ -107,6 +109,13 @@ class SimulationStep(BaseModel):
     emulation_mode: EmulationMode = EmulationMode.PROCEDURE
     evidence: list[str] = Field(default_factory=list)
     detection_result: DetectionResult = Field(default_factory=DetectionResult)
+    plan_step: int = 0
+    attempt: int = 1
+    tool_name: str = ""
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    tool_detection_metadata: dict[str, Any] = Field(default_factory=dict)
+    cleanup_error: str | None = None
+    decision: dict[str, Any] = Field(default_factory=dict)
 
     @property
     def detection_status(self) -> DetectionStatus:

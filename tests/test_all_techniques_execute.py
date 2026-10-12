@@ -152,6 +152,11 @@ async def test_all_registered_techniques_execute_with_default_parameters(
 
     monkeypatch.setattr(asyncio, "sleep", fast_sleep)
     orchestrator = Orchestrator(config=_config())
+    # Direct plugin tests supply server-side connection context explicitly.
+    from purplestrike.techniques import connection
+    monkeypatch.setattr(connection, "_target_credentials", {
+        "TARGET_AD_DOMAIN": "purple.local", "TARGET_USERNAME": "seif.hassine",
+    })
     failures: list[str] = []
 
     for technique in technique_registry.list_techniques():

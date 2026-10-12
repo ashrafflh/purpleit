@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -241,3 +241,75 @@ async def test_alert_query_reads_later_pages(monkeypatch) -> None:
     alerts = await connector.query_alerts(datetime.now(UTC), datetime.now(UTC))
     assert offsets == [0, 500]
     assert len(alerts) == 501
+
+
+@pytest.mark.parametrize("manager_offset", [-120, -6, 120])
+async def test_live_clock_offset_regression_keeps_current_alert_and_excludes_prior_event(
+    monkeypatch, manager_offset,
+):
+    from purplestrike.validation.engine import DetectionValidationEngine
+
+    start = datetime(2026, 10, 12, 19, 10, 2, tzinfo=UTC)
+    end = start + timedelta(seconds=30)
+    occurrence = start + timedelta(seconds=1)
+    documents = [
+        {
+            "id": "current-service",
+            "timestamp": (occurrence + timedelta(seconds=manager_offset)).isoformat(),
+            "rule": {"id": "91818", "mitre": {"id": ["T1543.003"]}},
+            "data": {"win": {"system": {"systemTime": occurrence.isoformat()}}},
+        },
+        {
+            "id": "previous-step",
+            "timestamp": occurrence.isoformat(),
+            "rule": {"id": "91818", "mitre": {"id": ["T1543.003"]}},
+            "data": {"win": {"system": {
+                "systemTime": (start - timedelta(seconds=5)).isoformat(),
+            }}},
+        },
+        {
+            "id": "without-windows-time",
+            "timestamp": occurrence.isoformat(),
+            "rule": {"id": "91818", "mitre": {"id": ["T1543.003"]}},
+        },
+        {
+            "id": "routine-logon",
+            "timestamp": occurrence.isoformat(),
+            "rule": {"id": "92657"},
+        },
+    ]
+
+    def matches_time_query(query, document):
+        if "bool" in query:
+            return sum(matches_time_query(q, document) for q in query["bool"]["should"]) >= (
+                query["bool"]["minimum_should_match"]
+            )
+        field, bounds = next(iter(query["range"].items()))
+        value = document
+        for key in field.split("."):
+            value = value.get(key, {})
+        if not value:
+            return False
+        return (
+            datetime.fromisoformat(bounds["gte"])
+            <= datetime.fromisoformat(value)
+            <= datetime.fromisoformat(bounds["lte"])
+        )
+
+    async def search(method, endpoint, **kwargs):
+        time_query = kwargs["json"]["params"]["body"]["query"]["bool"]["filter"][0]
+        return FakeResponse({"rawResponse": {"hits": {"hits": [
+            {"_source": doc} for doc in documents if matches_time_query(time_query, doc)
+        ]}}})
+
+    connector = WazuhConnector()
+    connector._dashboard_client = object()
+    monkeypatch.setattr(connector, "_dashboard_request", search)
+    result = await DetectionValidationEngine(connector).validate_step(
+        "T1543.003", [], "test-host", start, end,
+    )
+    assert result.status.value == "detected"
+    assert {alert.alert_id for alert in result.matched_alerts} == {
+        "current-service", "without-windows-time",
+    }
+    assert [alert.alert_id for alert in result.excluded_alerts] == ["routine-logon"]

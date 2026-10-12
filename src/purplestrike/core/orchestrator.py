@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from contextlib import suppress
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from purplestrike.core.plan import AttackPlan, AttackPlanStep
+from purplestrike.mcp.client import MCPToolClient
 from purplestrike.models.config import PurpleStrikeConfig
 from purplestrike.models.remediation import RemediationEntry
 from purplestrike.models.report import SimulationReport, SimulationSummary
@@ -18,13 +20,17 @@ from purplestrike.models.simulation import (
     CoverageStatus,
     DetectionResult,
     DetectionStatus,
-    ExecutionStatus,
     RiskResult,
     Simulation,
     SimulationStatus,
     SimulationStep,
 )
-from purplestrike.models.techniques import EmulationMode, Technique, TechniqueResult
+from purplestrike.models.techniques import (
+    EmulationMode,
+    ExecutionStatus,
+    Technique,
+    TechniqueResult,
+)
 from purplestrike.techniques.registry import technique_registry
 
 logger = logging.getLogger(__name__)
@@ -40,40 +46,44 @@ class Orchestrator:
         self._plan: AttackPlan | None = None
         self._simulation: Simulation | None = None
         self._stop_requested = False
-        self._set_target_credentials()
+        self._mcp: MCPToolClient | None = None
+        self._execution_environment: dict[str, Any] = {}
 
-    def _set_target_credentials(self) -> None:
-        from purplestrike.techniques.connection import (
-            set_connection_settings,
-            set_target_credentials,
-            set_target_platforms,
-        )
-
-        set_target_credentials(
-            domain=self.config.target_ad_domain,
-            username=self.config.target_username,
-            password=self.config.target_password,
-        )
-        set_connection_settings(
-            self.config.connection,
-            {
-                address: host.connection_method
-                for group in self.config.target_groups.values()
-                for host in group.hosts
-                for address in (host.hostname, host.ip)
-                if host.connection_method is not None
-            },
-        )
-        set_target_platforms(
-            {
-                address: str(host.os)
-                for group in self.config.target_groups.values()
-                for host in group.hosts
-                for address in (host.hostname, host.ip)
-            }
-        )
+    @asynccontextmanager
+    async def _tool_session(self) -> AsyncIterator[None]:
+        if self._mcp is not None:
+            yield
+            return
+        previous_registry = self._technique_registry
+        try:
+            async with MCPToolClient(self.config) as client:
+                self._mcp = client
+                self._technique_registry = client.registry
+                yield
+        finally:
+            self._mcp = None
+            self._technique_registry = previous_registry
 
     async def generate_plan(
+        self,
+        mode: str = "agent",
+        target_group_name: str = "",
+        playbook_path: Path | None = None,
+        playbook_name: str | None = None,
+        tactics: list[str] | None = None,
+        technique_ids: list[str] | None = None,
+    ) -> AttackPlan | None:
+        async with self._tool_session():
+            return await self._generate_plan(
+                mode,
+                target_group_name,
+                playbook_path,
+                playbook_name,
+                tactics,
+                technique_ids,
+            )
+
+    async def _generate_plan(
         self,
         mode: str = "agent",
         target_group_name: str = "",
@@ -93,6 +103,11 @@ class Orchestrator:
             return None
         plan = self._normalize_plan_targets(plan, target_group_name)
         plan = self._filter_plan_for_target_os(plan)
+        if len(plan.steps) > self.config.max_steps:
+            raise ValueError("Plan exceeds max_steps")
+        available = {t.technique_id for t in self._technique_registry.list_techniques()}
+        if any(step.technique_id not in available for step in plan.steps):
+            raise ValueError("Plan references a technique not exposed by configured MCP servers")
         logger.info(
             "Plan generated: name=%s mode=%s target_group=%s steps=%s techniques=%s",
             plan.name,
@@ -133,7 +148,7 @@ class Orchestrator:
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        steps = []
+        steps: list[AttackPlanStep] = []
         for step_data in data.get("steps", []):
             steps.append(
                 AttackPlanStep(
@@ -182,6 +197,7 @@ class Orchestrator:
             technique_registry=self._technique_registry,
             target_group=target_group,
             config=self.config,
+            tool_catalog=self._mcp.tools if self._mcp else {},
         )
 
         plan = await agent.generate_plan(tactics=tactics, technique_ids=technique_ids)
@@ -335,6 +351,11 @@ class Orchestrator:
             )
 
         console.print(table)
+        console.print(
+            "Agent execution may retry with changed parameters or reorder these approved steps. "
+            f"Limit: {self.config.max_steps} total attempts, "
+            f"{self.config.execution.max_retries_per_step} retries per step."
+        )
         console.print(f"\nEstimated time: ~{len(plan.steps) * 2} minutes\n")
 
         response = input("Approve this plan? [y/n/e(edit)]: ").strip().lower()
@@ -350,9 +371,29 @@ class Orchestrator:
         skip_cleanup: bool = False,
         dry_run: bool = False,
     ) -> SimulationReport | None:
-        from purplestrike.techniques.registry import load_default_techniques
+        if mode not in {"agent", "default", "playbook"}:
+            raise ValueError(f"Unknown execution mode: {mode}")
+        async with self._tool_session():
+            return await self._execute_with_tools(
+                mode,
+                target_group_name,
+                playbook_name,
+                tactics,
+                technique_ids,
+                skip_cleanup,
+                dry_run,
+            )
 
-        load_default_techniques()
+    async def _execute_with_tools(
+        self,
+        mode: str = "agent",
+        target_group_name: str = "",
+        playbook_name: str | None = None,
+        tactics: list[str] | None = None,
+        technique_ids: list[str] | None = None,
+        skip_cleanup: bool = False,
+        dry_run: bool = False,
+    ) -> SimulationReport | None:
         logger.info(
             "Preparing simulation: mode=%s target_group=%s tactics=%s techniques=%s "
             "skip_cleanup=%s dry_run=%s",
@@ -399,7 +440,7 @@ class Orchestrator:
             id=sim_id,
             timestamp=datetime.now(UTC),
             mode=mode,
-            target_group=target_group_name,
+            target_group=plan.target_group,
             llm_provider=self.config.llm.provider.value,
             siem_connector=self.config.siem.connector,
             plan_name=plan.name,
@@ -429,166 +470,34 @@ class Orchestrator:
         else:
             logger.warning("SIEM connector unavailable: %s", self.config.siem.connector)
 
-        sim_steps: list[SimulationStep] = []
-        execution_target = self._target_for_group(target_group_name or plan.target_group)
-        for i, plan_step in enumerate(plan.steps, 1):
-            if self._stop_requested:
-                simulation.status = SimulationStatus.ABORTED
-                break
+        from purplestrike.core.execution_graph import ExecutionGraph, graph_metadata
 
-            console.print(
-                f"\n[*] Executing step {i}/{len(plan.steps)}: "
-                f"{plan_step.technique_id} {plan_step.technique_name}..."
-            )
-            logger.info(
-                "Technique execution started: simulation_id=%s step=%s/%s technique_id=%s "
-                "technique_name=%s target=%s parameters=%s",
-                sim_id,
-                i,
-                len(plan.steps),
-                plan_step.technique_id,
-                plan_step.technique_name,
-                execution_target,
-                plan_step.parameters,
-            )
-
-            step_start = datetime.now(UTC)
-            technique_result = await self._execute_step(
-                plan_step,
-                plugin_registry,
-                target=execution_target,
-            )
-            step_end = datetime.now(UTC)
-            logger.info(
-                "Technique execution finished: simulation_id=%s step=%s technique_id=%s "
-                "success=%s status=%s duration_seconds=%.3f output=%r error=%r "
-                "artifacts=%s evidence=%s emulation_mode=%s",
-                sim_id,
-                i,
-                plan_step.technique_id,
-                technique_result.success,
-                technique_result.execution_status,
-                technique_result.execution_time_seconds,
-                technique_result.output,
-                technique_result.error,
-                technique_result.artifacts,
-                technique_result.evidence,
-                technique_result.emulation_mode,
-            )
-
-            exec_status = (
-                ExecutionStatus.SUCCESS if technique_result.success else ExecutionStatus.FAILURE
-            )
-
-            detection_result = DetectionResult(status=DetectionStatus.UNKNOWN)
-            validation_end = step_end
+        self._simulation = simulation
+        execution_target = self._target_for_group(plan.target_group)
+        runner = ExecutionGraph(
+            self,
+            plan,
+            plugin_registry,
+            siem_connector,
+            execution_target,
+            mode,
+            skip_cleanup,
+        )
+        metadata: dict[str, Any] = {}
+        try:
+            state = await runner.run()
+            sim_steps = state["results"]
+            simulation.status = SimulationStatus(state["status"])
+            metadata = graph_metadata(state)
+        except Exception as exc:
+            logger.exception("Execution graph failed")
+            sim_steps = runner.results
+            simulation.status = SimulationStatus.FAILED
+            metadata = {"engine": "langgraph", "transport": "mcp", "reason": str(exc)}
+        finally:
             if siem_connector:
-                import asyncio
-
-                logger.info(
-                    "Detection validation scheduled: simulation_id=%s technique_id=%s "
-                    "delay_seconds=%s",
-                    sim_id,
-                    plan_step.technique_id,
-                    self.config.detection_check_delay,
-                )
-                await asyncio.sleep(self.config.detection_check_delay)
-                validation_end = datetime.now(UTC)
-                detection_result = await self._validate_detection(
-                    siem_connector=siem_connector,
-                    plan_step=plan_step,
-                    target=execution_target,
-                    start_time=step_start,
-                    end_time=validation_end,
-                    plugin_registry=plugin_registry,
-                    execution_output=technique_result.output,
-                )
-
-            detection_result = self._account_for_execution(
-                detection_result, technique_result.success
-            )
-            detection_result = self._assess_coverage(detection_result, technique_result)
-            logger.info(
-                "Detection validation finished: simulation_id=%s technique_id=%s "
-                "detection_status=%s confidence=%.3f matched_rules=%s matched_alert_ids=%s "
-                "candidate_alert_count=%s coverage_status=%s coverage_eligible=%s "
-                "coverage_reason=%r correlation_reasoning=%r",
-                sim_id,
-                plan_step.technique_id,
-                detection_result.status,
-                detection_result.confidence,
-                detection_result.matched_rules,
-                [alert.alert_id for alert in detection_result.matched_alerts],
-                len(detection_result.candidate_alerts),
-                detection_result.coverage_status,
-                detection_result.coverage_eligible,
-                detection_result.coverage_reason,
-                detection_result.ai_correlation_reasoning,
-            )
-            logger.debug(
-                "Detection evidence: simulation_id=%s technique_id=%s matched_alerts=%s "
-                "candidate_alerts=%s risk=%s",
-                sim_id,
-                plan_step.technique_id,
-                [alert.model_dump(mode="json") for alert in detection_result.matched_alerts],
-                [alert.model_dump(mode="json") for alert in detection_result.candidate_alerts],
-                detection_result.risk.model_dump(mode="json"),
-            )
-            det_status = detection_result.status
-            det_icon = {
-                "detected": "[green]DETECTED[/green]",
-                "partially_detected": "[yellow]PARTIALLY DETECTED[/yellow]",
-                "not_detected": "[red]NOT DETECTED[/red]",
-                "unknown": "[dim]UNKNOWN[/dim]",
-            }
-            status_icon = "OK" if technique_result.success else "FAIL"
-            status_text = "successfully" if technique_result.success else "failed"
-            console.print(
-                f"    [{status_icon}] Executed {status_text} "
-                f"({technique_result.execution_time_seconds:.1f}s)"
-            )
-            console.print(f"    {det_icon.get(det_status, det_status)}")
-            console.print(
-                f"    ATT&CK coverage: {detection_result.coverage_status.value} "
-                f"({technique_result.emulation_mode or EmulationMode.PROCEDURE})"
-            )
-            if not technique_result.success and technique_result.error:
-                console.print(f"    Error: {technique_result.error[:500]}", markup=False)
-
-            sim_step = SimulationStep(
-                step=i,
-                technique_id=plan_step.technique_id,
-                technique_name=plan_step.technique_name,
-                tactic=self._get_tactic_for_technique(plan_step.technique_id),
-                target=execution_target,
-                execution_status=exec_status,
-                execution_time_seconds=technique_result.execution_time_seconds,
-                execution_started_at=step_start,
-                execution_ended_at=step_end,
-                validation_ended_at=validation_end,
-                execution_output=technique_result.output,
-                execution_error=technique_result.error,
-                artifacts=technique_result.artifacts,
-                emulation_mode=technique_result.emulation_mode or EmulationMode.PROCEDURE,
-                evidence=technique_result.evidence,
-                detection_result=detection_result,
-            )
-            sim_steps.append(sim_step)
-            if not skip_cleanup:
-                cleanup_plan = plan.model_copy(update={"steps": [plan_step]})
-                await self._cleanup_all(cleanup_plan, plugin_registry, target=execution_target)
-            else:
-                logger.info(
-                    "Cleanup skipped: simulation_id=%s technique_id=%s target=%s",
-                    sim_id,
-                    plan_step.technique_id,
-                    execution_target,
-                )
-
-        if siem_connector:
-            with suppress(Exception):
-                await siem_connector.teardown()
-            logger.info("SIEM connector closed: %s", self.config.siem.connector)
+                with suppress(Exception):
+                    await siem_connector.teardown()
 
         simulation.steps = sim_steps
         if simulation.status == SimulationStatus.COMPLETED and any(
@@ -603,7 +512,7 @@ class Orchestrator:
             simulation_id=sim_id,
             timestamp=simulation.timestamp,
             mode=mode,
-            target_group=target_group_name,
+            target_group=plan.target_group,
             llm_provider=self.config.llm.provider.value,
             siem_connector=self.config.siem.connector,
             status=simulation.status,
@@ -611,6 +520,7 @@ class Orchestrator:
             results=sim_steps,
             summary=summary,
             remediation=remediation_entries,
+            metadata=metadata,
         )
 
         output_dir = Path(self.config.output_dir)
@@ -652,48 +562,14 @@ class Orchestrator:
         plugin_registry: Any,
         target: str,
     ) -> TechniqueResult:
-        import time
-
-        executor = plugin_registry.find_executor_for_technique(plan_step.technique_id)
-
-        if executor is None:
-            executor = plugin_registry.get_attack_executor("custom_python")
-
-        if executor is None:
-            logger.error("No executor available for technique %s", plan_step.technique_id)
-            return TechniqueResult(
-                technique_id=plan_step.technique_id,
-                success=False,
-                error="No executor available",
-                execution_status=ExecutionStatus.FAILURE,
-            )
-
-        start = time.monotonic()
-        try:
-            result = await executor.execute(
-                technique_id=plan_step.technique_id,
-                target=target,
-                parameters=plan_step.parameters,
-            )
-        except Exception as e:
-            logger.exception(
-                "Executor raised an exception: technique_id=%s target=%s",
-                plan_step.technique_id,
-                target,
-            )
-            result = TechniqueResult(
-                technique_id=plan_step.technique_id,
-                success=False,
-                error=str(e),
-                execution_status=ExecutionStatus.FAILURE,
-            )
-        result.execution_time_seconds = time.monotonic() - start
-        technique = self._technique_registry.get_technique(plan_step.technique_id)
-        if result.emulation_mode is None:
-            result.emulation_mode = (
-                technique.emulation_mode if technique else EmulationMode.PREREQUISITE
-            )
-        return result
+        if self._mcp is None:
+            raise RuntimeError("Technique execution requires an active MCP session")
+        return await self._mcp.execute(
+            plan_step.technique_id,
+            target,
+            plan_step.parameters,
+            self._execution_environment,
+        )
 
     @staticmethod
     def _account_for_execution(result: DetectionResult, success: bool) -> DetectionResult:
@@ -808,33 +684,17 @@ class Orchestrator:
         return TacticID.INITIAL_ACCESS
 
     async def _cleanup_all(self, plan: AttackPlan, plugin_registry: Any, target: str) -> None:
+        if self._mcp is None:
+            raise RuntimeError("Technique cleanup requires an active MCP session")
         for step in plan.steps:
-            for executor_name in plugin_registry.list_attack_executors():
-                executor = plugin_registry.get_attack_executor(executor_name)
-                if executor and step.technique_id in executor.supported_techniques:
-                    try:
-                        logger.info(
-                            "Cleanup started: technique_id=%s target=%s executor=%s parameters=%s",
-                            step.technique_id,
-                            target,
-                            executor_name,
-                            step.parameters,
-                        )
-                        await executor.cleanup(step.technique_id, target, step.parameters)
-                        logger.info(
-                            "Cleanup finished: technique_id=%s target=%s executor=%s",
-                            step.technique_id,
-                            target,
-                            executor_name,
-                        )
-                    except Exception as e:
-                        logger.exception(
-                            "Cleanup failed for %s on %s with executor %s: %s",
-                            step.technique_id,
-                            target,
-                            executor_name,
-                            e,
-                        )
+            await self._mcp.cleanup(
+                step.technique_id,
+                target,
+                step.parameters,
+                {
+                    "target_group": plan.target_group,
+                },
+            )
 
     def _generate_remediation(self, steps: list[SimulationStep]) -> list[RemediationEntry]:
         from purplestrike.remediation.engine import RemediationEngine
@@ -847,6 +707,7 @@ class Orchestrator:
 
     def _plugin_config(self) -> dict[str, Any]:
         return {
+            "load_attack_executors": False,
             "siem_connectors": {
                 self.config.siem.connector: self.config.siem.model_dump(mode="json"),
             },

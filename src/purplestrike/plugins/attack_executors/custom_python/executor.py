@@ -156,6 +156,7 @@ class CustomPythonExecutor:
                         self._runs.pop((target, technique_id), None)
             except Exception as e:
                 logger.warning(f"Cleanup failed for {technique_id} on {target}: {e}")
+                raise
 
     async def teardown(self) -> None:
         self._connections.clear()

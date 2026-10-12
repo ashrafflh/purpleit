@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 class TechniqueRegistry:
     """Registry of all available MITRE ATT&CK techniques."""
 
-    def __init__(self) -> None:
+    def __init__(self, autoload: bool = True) -> None:
         self._techniques: dict[str, Technique] = {}
-        self._loaded = False
+        self._loaded = not autoload
 
     def register(self, technique: Technique) -> None:
         self._techniques[technique.technique_id] = technique

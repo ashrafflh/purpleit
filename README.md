@@ -13,7 +13,7 @@ PurpleStrike is an open-source, AI-driven Breach and Attack Simulation (BAS) pla
 
 ## Key Features
 
-- **Autonomous AI Agent** — Plans and chains multi-stage attack paths using LLM reasoning (OpenAI, DeepSeek, Anthropic, Ollama, vLLM)
+- **Autonomous AI Agent** — Plans and executes approved techniques through MCP, using LangGraph and per-step detection feedback (OpenAI, DeepSeek, Anthropic, Ollama, vLLM)
 - **Pre-built Playbooks** — Run defined attack scenarios without AI planning
 - **Hybrid Detection Validation** — Deterministic rule mapping + LLM-powered alert correlation for accurate detection checks
 - **Financial Risk Quantification** — FAIR-inspired model translates detection gaps into dollar-value Annualized Loss Expectancy (ALE)
@@ -792,9 +792,9 @@ purplestrike playbooks validate path/to/playbook.yaml
 
 ```
 ┌──────────────┐    ┌────────────────┐    ┌─────────────────┐
-│ AI Agent /   │───▶│ Attack Plugin  │───▶│ Target Systems  │
-│ Playbook     │    │ (Custom/ART/   │    │ (AD, Win, Linux)│
-│ Runner       │    │  Caldera/C2)   │    │                 │
+│ LangGraph    │───▶│ MCP Servers    │───▶│ Target Systems  │
+│ Agent /      │    │ (Technique     │    │ (AD, Win, Linux)│
+│ Fixed Plan   │    │  Plugins)      │    │                 │
 └──────────────┘    └────────────────┘    └────────┬────────┘
                                                    │
                                                    ▼
@@ -976,7 +976,7 @@ The `Orchestrator` is the top-level coordinator for every simulation run. It:
 
 - Generates attack plans via AI agent or playbook parsing
 - Displays the plan for operator approval (plan-once-approval safety model)
-- Executes each plan step via the configured attack executor
+- Executes each technique and its cleanup exclusively through configured MCP servers
 - Validates detection after each step (with configurable delay for SIEM ingestion)
 - Calculates financial risk (ALE) for undetected techniques
 - Generates remediation guidance (Wazuh rules + generic)
@@ -1005,6 +1005,150 @@ The `AgentLoop` uses an LLM provider to generate realistic, chained attack plans
 - Filters out unsafe techniques (`safe_to_execute=True` only)
 - Falls back to default technique selection if the LLM fails
 
+#### Agentic execution (`core/execution_graph.py`)
+
+`--mode agent` now executes a LangGraph workflow after plan approval. The graph has
+one node per approved technique tool, an environment node, a detection node, and
+an AI decision node. Every attempt sends its execution output, errors, evidence,
+tool detection metadata, SIEM assessment, cleanup outcome, and recent history to
+the configured LLM. Configured secrets are redacted from execution feedback.
+
+```mermaid
+flowchart LR
+    Environment -->|feasible approved step| MCP[Technique MCP tool]
+    MCP --> Detection[SIEM validation and cleanup]
+    Detection --> Decision[AI decision]
+    Decision -->|continue, retry, switch| Environment
+    Decision -->|abort, pause, completed| Report
+    Environment -->|stop or limit| Report
+```
+
+The AI can continue to the next pending step, retry the current step with changed
+parameters, switch to another pending **approved** step, abort, or pause. A switch
+reorders the remaining work; it does not authorize additional techniques or hosts.
+For `continue`, a redundant `next_step` is accepted only if it matches the first
+pending plan position; `{}` parameters mean no changes. Conflicting transitions
+still pause, with the rejected decision retained in the report and log after
+secret redaction.
+Tool schemas, configured target OS, retry limits, and the total attempt budget are
+enforced outside the model. `max_steps` includes retries. Invalid decisions, a
+missing LLM, ambiguous tool mappings, and uncertain execution outcomes never fall
+back to a local executor. Detection failures remain `unknown` feedback.
+
+`--mode default` and `--mode playbook` use the same MCP graph and fixed sequencing.
+`--dry-run` discovers tools and generates a plan without calling technique tools.
+Plan approval covers parameter adjustments and reordering within the displayed
+scope. Cleanup runs after detection and before the next attempt, so later steps
+must not assume that an earlier step's temporary resources still exist.
+
+JSON and CSV reports retain each attempt's original plan position, tool name,
+parameters, detection metadata, cleanup error, and AI decision. A paused run stops
+dispatching tools and closes its sessions; the JSON report preserves the remaining
+positions and parameters for operator review. Automatic cross-process resume is
+not implemented; prepare and approve the remaining work as a new run. Existing
+executor cleanup ownership remains session-local, including when cleanup is skipped.
+
+#### Execution logging
+
+Every run writes detailed events to the console (stderr, INFO and above) and to
+`logs/purplestrike_<timestamp>_<pid>.log` (DEBUG and above). No extra flag is needed.
+Files rotate at 10 MB, retaining up to five backups per log file.
+
+- Graph start and finish events include the approved plan, environment, status,
+  and remaining steps.
+- Each step records its plan position, attempt, target, parameters, and outcome.
+- Each MCP call records the server, tool name, complete arguments, response or
+  exception, duration, and a shared `call_id`. Cleanup calls are included.
+- Detection events include execution and validation timestamps, expected rules, alerts,
+  coverage assessment, reasoning, and cleanup outcome.
+- AI events record the provider and model, execution feedback, response before
+  validation, applied decision, reason, and next step or retry parameters.
+  Rejected and malformed decisions are logged to explain pauses. Full planning
+  and decision prompts are DEBUG events in the file only.
+
+Execution events carry the simulation ID and, where applicable, the plan position
+and attempt so calls and decisions can be traced together. Tool output is not
+truncated. Known configured credentials and sensitive fields such as `password`,
+`api_key`, and `authorization` are redacted, including later echoes of those
+values; unrelated text in tool output is preserved.
+
+#### MCP servers and adding tools
+
+Install dependencies with `uv sync --all-extras`. With `mcp.servers` empty, the
+orchestrator launches `python -m purplestrike.mcp.server` over stdio using its own
+interpreter. That process wraps the existing executor plugins, keeps their cleanup
+state alive throughout the run, and receives the configured hosts and connection
+settings. Names include `run_powershell`, `execute_scheduled_task`, and
+`probe_default_accounts`; other built-ins use `run_<technique_id>` with dots replaced
+by underscores. The server also has a `purplestrike-mcp` entry point.
+
+Configure replacement servers in `~/.purplestrike/config.yaml`:
+
+```yaml
+mcp:
+  timeout_seconds: 180
+  servers:
+    lab_tools:
+      transport: streamable_http
+      url: http://localhost:8000/mcp
+    extra_tools:
+      transport: stdio
+      command: python
+      args: [path/to/extra_server.py]
+      env: {}
+execution:
+  max_retries_per_step: 2
+  decision_timeout_seconds: 90
+```
+
+A nonempty server mapping replaces the bundled server. `headers` is supported for
+HTTP authentication. `PURPLESTRIKE_MCP_SERVERS` accepts the server mapping as JSON;
+`PURPLESTRIKE_MCP_TIMEOUT` and `PURPLESTRIKE_MAX_RETRIES` override the corresponding
+limits. The standalone bundled server accepts `PURPLESTRIKE_MCP_CONFIG` as executor
+configuration JSON, or reads the standard `PURPLESTRIKE_*` environment variables
+when that JSON is absent. It refuses calls to hosts outside its configuration.
+
+New servers can add tools without changing the graph. Each technique tool must
+publish a description explaining its behavior and execution constraints, JSON
+input/output schemas, and this MCP tool metadata:
+
+```json
+{
+  "_meta": {
+    "purplestrike": {
+      "technique": {
+        "technique_id": "T1059.001",
+        "name": "PowerShell",
+        "tactic": "TA0002",
+        "target_os": ["windows"],
+        "safe_to_execute": true,
+        "emulation_mode": "procedure"
+      },
+      "cleanup_tool": "run_powershell_cleanup"
+    }
+  }
+}
+```
+
+`technique` follows `models/techniques.py:Technique`; include parameter definitions,
+detection mappings, validation notes, and an accurate emulation mode. Tools without
+this metadata are ignored. Duplicate technique IDs across servers are rejected
+instead of choosing a tool silently. A cleanup tool must be listed by the same
+server; tools with no persistent effects can supply a no-op cleanup endpoint.
+
+Inputs use `{"target": "configured-host", "parameters": {}, "environment": {}}`.
+Results must use MCP `structuredContent` conforming to
+`mcp/contracts.py:ToolOutput`: `technique_id`, boolean `success`, output/error text,
+execution status and duration, artifacts/evidence, emulation mode, and
+`detection_metadata`. The last field contains tool observations; SIEM validation
+remains the authoritative detection assessment. Cleanup accepts the same inputs
+and returns structured content with `success: true`, or an error. Review the
+bundled `mcp/server.py` for a complete wrapper around an executor plugin.
+
+The implementation uses the [LangGraph graph API](https://docs.langchain.com/oss/python/langgraph/graph-api)
+and the [MCP Python SDK v1 protocol interfaces](https://github.com/modelcontextprotocol/python-sdk/tree/v1.x).
+MCP is constrained to `<2` because the v2 SDK changes these interfaces.
+
 #### Detection Validation Engine (`validation/engine.py`)
 
 Hybrid detection validation with two layers:
@@ -1014,7 +1158,7 @@ Hybrid detection validation with two layers:
 
 Returns `DetectionResult` with activity status (`detected` / `partially_detected` / `not_detected` / `unknown`), confidence, matched rules, ATT&CK coverage status, coverage eligibility, and reasoning.
 
-The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Queries allow a two-second clock margin (`siem.extra.clock_skew_seconds`), checking Windows event timestamps at the boundary to avoid including earlier cleanup events. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches. Coverage assessment is performed after execution using the scenario's evidence mode, independently of whether the generated activity produced an alert.
+The validator merges saved-plan rules with current technique mappings and the installed SIEM catalog. Explicit mappings can match even when the alert uses a different MITRE ID, such as Wazuh rule `91815` for PowerShell process discovery. Wazuh searches both manager `timestamp` and Windows `data.win.system.systemTime`, so a manager clock offset does not hide alerts from short steps. Queries retain a two-second margin (`siem.extra.clock_skew_seconds`); the validator then checks the exact Windows event-time window to exclude earlier steps and cleanup. Other events use their alert timestamp. The `detection.query.started` and `detection.query.result` log events show query bounds, alert timestamps, and counts of returned, out-of-window, routine authentication, and candidate events. Empty candidate results explain these counts in the report. AI correlation receives bounded raw-event context with configured credentials redacted. Candidate alerts are retained separately from confirmed matches. Coverage assessment is performed after execution using the scenario's evidence mode, independently of whether the generated activity produced an alert.
 
 Routine Windows authentication events (4624, 4634, 4647, 4672) and Wazuh rules 92657, 60106, 60137, and 67028 are excluded before rule matching and AI correlation, regardless of their MITRE tags or expected-rule mappings. They remain in `DetectionResult.excluded_alerts` for audit. Successful transport authentication alone never confirms technique detection; failed-logon and account-change events remain eligible.
 

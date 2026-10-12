@@ -133,7 +133,9 @@ async def _run(
         )
 
         if report:
-            console.print("\n[bold]Simulation Complete[/bold]")
+            console.print(f"\n[bold]Simulation {report.status.value}[/bold]")
+            if report.metadata.get("reason"):
+                console.print(f"  Reason: {report.metadata['reason']}", markup=False)
             console.print(f"  Techniques executed: {report.summary.total_techniques}")
             console.print(f"  Detected: [green]{report.summary.detected}[/green]")
             console.print(f"  Partially Detected: [yellow]{report.summary.partially_detected}[/yellow]")

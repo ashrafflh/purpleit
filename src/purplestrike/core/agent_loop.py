@@ -2,17 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from purplestrike.core.plan import AttackPlan, AttackPlanStep
 from purplestrike.models.config import PurpleStrikeConfig, TargetGroup
 from purplestrike.models.techniques import Technique
+from purplestrike.observability import AuditLogger
 from purplestrike.techniques.registry import TechniqueRegistry
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are an adversary emulation planner for PurpleStrike, a breach and attack simulation tool.
-Your job is to select and chain MITRE ATT&CK techniques to simulate a realistic attack against the specified target environment.
+SYSTEM_PROMPT = """You are an adversary emulation planner for PurpleStrike.
+Select and chain available MITRE ATT&CK techniques for the specified test environment.
 
 SAFETY CONSTRAINTS (you MUST follow these):
 - NEVER suggest techniques that destroy data or cause denial of service
@@ -49,23 +51,59 @@ class AgentLoop:
         technique_registry: TechniqueRegistry,
         target_group: TargetGroup,
         config: PurpleStrikeConfig,
+        tool_catalog: dict[str, Any] | None = None,
     ) -> None:
         self.llm_provider = llm_provider
         self.technique_registry = technique_registry
         self.target_group = target_group
         self.config = config
+        self.tool_catalog = tool_catalog or {}
+        self.audit = AuditLogger(logger, config)
 
     async def generate_plan(
         self,
         tactics: list[str] | None = None,
         technique_ids: list[str] | None = None,
     ) -> AttackPlan | None:
+        started = time.monotonic()
+        details: dict[str, Any] = {
+            "provider": self.config.llm.provider.value,
+            "model": self.config.llm.model,
+            "target_group": self.target_group.name,
+        }
         try:
             messages = self._build_messages(tactics, technique_ids)
+            self.audit.event(
+                "ai.plan.request",
+                **details,
+                tactics=tactics,
+                technique_ids=technique_ids,
+                max_steps=self.config.max_steps,
+            )
+            self.audit.event("ai.plan.prompt", level=logging.DEBUG, **details, messages=messages)
             response = await self.llm_provider.complete(messages)
-            return self._parse_response(response)
+            self.audit.event(
+                "ai.plan.response",
+                **details,
+                duration_seconds=round(time.monotonic() - started, 3),
+                response=self.audit.redactor.response(response),
+            )
+            plan = self._parse_response(response)
+            allowed = {
+                t.technique_id for t in self._get_available_techniques(tactics, technique_ids)
+            }
+            if plan and any(s.technique_id not in allowed for s in plan.steps):
+                logger.error("Agent plan referenced a technique outside the available selection")
+                return None
+            return plan
         except Exception as e:
-            logger.error(f"Agent failed to generate plan: {e}")
+            self.audit.event(
+                "ai.plan.error",
+                level=logging.ERROR,
+                **details,
+                error_type=type(e).__name__,
+                error=str(e),
+            )
             return None
 
     def _build_messages(
@@ -75,6 +113,19 @@ class AgentLoop:
     ) -> list[dict[str, str]]:
         techniques = self._get_available_techniques(tactics, technique_ids)
         technique_list_str = self._format_techniques(techniques)
+        if self.tool_catalog:
+            technique_list_str += "\nMCP TOOL SCHEMAS:\n" + json.dumps(
+                [
+                    {
+                        "technique_id": t.technique_id,
+                        "tool_name": self.tool_catalog[t.technique_id].name,
+                        "description": self.tool_catalog[t.technique_id].tool.description,
+                        "input_schema": self.tool_catalog[t.technique_id].tool.inputSchema,
+                    }
+                    for t in techniques
+                    if t.technique_id in self.tool_catalog
+                ]
+            )
         target_context = self._format_target_context()
 
         user_message = f"""Generate an attack plan for the following target environment:
@@ -157,16 +208,18 @@ Generate the plan now."""
 
             data = json.loads(json_str.strip())
 
-            steps = []
+            steps: list[AttackPlanStep] = []
             for step_data in data.get("steps", []):
-                steps.append(AttackPlanStep(
-                    order=step_data.get("order", len(steps) + 1),
-                    technique_id=step_data.get("technique_id", ""),
-                    technique_name=step_data.get("technique_name", ""),
-                    parameters=step_data.get("parameters", {}),
-                    expected_detection_rules=step_data.get("expected_detection_rules", []),
-                    risk_level=step_data.get("risk_level", "medium"),
-                ))
+                steps.append(
+                    AttackPlanStep(
+                        order=step_data.get("order", len(steps) + 1),
+                        technique_id=step_data.get("technique_id", ""),
+                        technique_name=step_data.get("technique_name", ""),
+                        parameters=step_data.get("parameters", {}),
+                        expected_detection_rules=step_data.get("expected_detection_rules", []),
+                        risk_level=step_data.get("risk_level", "medium"),
+                    )
+                )
 
             return AttackPlan(
                 name=data.get("name", "AI-Generated Plan"),

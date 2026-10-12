@@ -32,7 +32,8 @@ class PluginLoader:
 
     async def load_all(self, config: dict[str, Any] | None = None) -> None:
         config = config or {}
-        await self._load_builtin_executors(config.get("attack_executors", {}))
+        if config.get("load_attack_executors", True):
+            await self._load_builtin_executors(config.get("attack_executors", {}))
         await self.load_siem_connectors(config)
         await self._load_builtin_llm_providers(config.get("llm_providers", {}))
         await self._load_builtin_report_formatters(config.get("report_formatters", {}))

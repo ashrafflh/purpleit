@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, ClassVar
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -14,8 +16,42 @@ from purplestrike.models.config import (
     TargetGroup,
     TargetHost,
 )
-from purplestrike.models.techniques import TechniqueResult
 from purplestrike.models.simulation import DetectionResult, DetectionStatus
+from purplestrike.models.techniques import TechniqueResult
+
+
+@pytest.fixture(autouse=True)
+def mock_mcp_transport(monkeypatch):
+    """Orchestrator regression tests must never contact real target hosts."""
+    from mcp.types import Tool
+
+    from purplestrike.mcp.client import MCPToolClient, TechniqueTool
+    from purplestrike.mcp.contracts import ToolOutput, input_schema, tool_name
+    from purplestrike.techniques.registry import technique_registry
+
+    class RecordingMCPClient(MCPToolClient):
+        async def __aenter__(self):
+            self.registry = technique_registry
+            for technique in self.registry.list_techniques():
+                name = tool_name(technique)
+                self.tools[technique.technique_id] = TechniqueTool(
+                    "test",
+                    Tool(name=name, inputSchema=input_schema(technique)),
+                    technique,
+                    name + "_cleanup",
+                )
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def execute(self, technique_id, target, parameters, environment):
+            return ToolOutput(technique_id=technique_id, success=True)
+
+        async def cleanup(self, *args):
+            pass
+
+    monkeypatch.setattr("purplestrike.core.orchestrator.MCPToolClient", RecordingMCPClient)
 
 
 def _config(hostname: str = "10.10.1.108", ip: str = "10.10.1.108") -> PurpleStrikeConfig:
@@ -180,7 +216,10 @@ def test_default_plan_populates_required_parameter_defaults() -> None:
         "domain": "purple.local",
     }
     assert parameters_by_id["T1543.003"]["service_name"].startswith("PurpleStrikePrivEscSvc_")
-    assert parameters_by_id["T1543.003"]["binary_path"] == "C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike"
+    assert (
+        parameters_by_id["T1543.003"]["binary_path"]
+        == "C:\\Windows\\System32\\cmd.exe /c echo PurpleStrike"
+    )
 
 
 def test_default_plan_filters_steps_for_target_os() -> None:
@@ -207,12 +246,15 @@ def test_default_tasks_have_distinct_names_across_steps_and_runs() -> None:
     assert all(name.startswith("PurpleStrike") for name in names)
 
 
-@pytest.mark.parametrize(("status", "expected"), [
-    (DetectionStatus.DETECTED, DetectionStatus.PARTIALLY_DETECTED),
-    (DetectionStatus.PARTIALLY_DETECTED, DetectionStatus.PARTIALLY_DETECTED),
-    (DetectionStatus.NOT_DETECTED, DetectionStatus.UNKNOWN),
-    (DetectionStatus.UNKNOWN, DetectionStatus.UNKNOWN),
-])
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (DetectionStatus.DETECTED, DetectionStatus.PARTIALLY_DETECTED),
+        (DetectionStatus.PARTIALLY_DETECTED, DetectionStatus.PARTIALLY_DETECTED),
+        (DetectionStatus.NOT_DETECTED, DetectionStatus.UNKNOWN),
+        (DetectionStatus.UNKNOWN, DetectionStatus.UNKNOWN),
+    ],
+)
 def test_failed_execution_does_not_claim_full_coverage(status, expected) -> None:
     result = DetectionResult(status=status, confidence=1.0, matched_rules=["123"])
     result = Orchestrator._account_for_execution(result, success=False)
@@ -236,9 +278,11 @@ async def test_generate_plan_default_mode_is_deterministic_and_os_filtered() -> 
 
 
 @pytest.mark.asyncio
-async def test_execute_step_passes_configured_target_to_executor() -> None:
+async def test_execute_step_passes_configured_target_only_to_mcp() -> None:
     orchestrator = Orchestrator(config=_config())
     executor = RecordingExecutor()
+    execute = AsyncMock(return_value=TechniqueResult(technique_id="T1059.001", success=True))
+    orchestrator._mcp = SimpleNamespace(execute=execute)
     step = AttackPlanStep(
         order=1,
         technique_id="T1059.001",
@@ -251,7 +295,8 @@ async def test_execute_step_passes_configured_target_to_executor() -> None:
         target=orchestrator._target_for_group("purple.local"),
     )
 
-    assert executor.received_target == "10.10.1.108"
+    assert execute.call_args.args[1] == "10.10.1.108"
+    assert executor.received_target == ""
 
 
 @pytest.mark.asyncio
@@ -300,6 +345,7 @@ async def test_execute_loop_uses_config_target_group_for_execute_step() -> None:
     orchestrator = RecordingOrchestrator(config=config)
 
     report = await orchestrator.execute(
+        mode="default",
         target_group_name="purple.local",
         skip_cleanup=True,
     )
@@ -313,6 +359,8 @@ async def test_execute_loop_uses_config_target_group_for_execute_step() -> None:
 async def test_cleanup_receives_plan_parameters() -> None:
     orchestrator = Orchestrator(config=_config())
     executor = RecordingExecutor()
+    cleanup = AsyncMock()
+    orchestrator._mcp = SimpleNamespace(cleanup=cleanup)
     plan = AttackPlan(
         name="Cleanup Parameters",
         target_group="purple.local",
@@ -331,7 +379,8 @@ async def test_cleanup_receives_plan_parameters() -> None:
         target="10.10.1.108",
     )
 
-    assert executor.cleanup_parameters == {"command": "whoami"}
+    assert cleanup.call_args.args[2] == {"command": "whoami"}
+    assert executor.cleanup_parameters is None
 
 
 @pytest.mark.asyncio
@@ -381,6 +430,7 @@ async def test_execute_report_preserves_technique_error_details() -> None:
     orchestrator = FailingOrchestrator(config=config)
 
     report = await orchestrator.execute(
+        mode="default",
         target_group_name="purple.local",
         skip_cleanup=True,
     )
@@ -436,6 +486,7 @@ async def test_execute_disables_siem_validation_when_setup_fails(monkeypatch) ->
     orchestrator = RecordingOrchestrator(config=config)
 
     report = await orchestrator.execute(
+        mode="default",
         target_group_name="purple.local",
         skip_cleanup=True,
     )
@@ -537,9 +588,10 @@ async def test_execute_validation_window_includes_detection_delay(monkeypatch) -
     async def fast_sleep(seconds: float) -> None:
         return None
 
+    import asyncio
+
     from purplestrike.plugins import loader as loader_module
     from purplestrike.plugins import registry as registry_module
-    import asyncio
 
     executor = RecordingExecutor()
     siem = RecordingSIEMConnector()
@@ -554,6 +606,7 @@ async def test_execute_validation_window_includes_detection_delay(monkeypatch) -
     orchestrator = RecordingOrchestrator(config=config)
 
     report = await orchestrator.execute(
+        mode="default",
         target_group_name="purple.local",
         skip_cleanup=True,
     )

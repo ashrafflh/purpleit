@@ -6,13 +6,15 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from purplestrike.observability import ExecutionFormatter
+
 _LOGGER_NAME = "purplestrike"
 _FILE_HANDLER_NAME = "purplestrike_file"
 _CONSOLE_HANDLER_NAME = "purplestrike_console"
 
 
 def configure_logging(log_dir: str | Path = "logs") -> Path:
-    """Persist PurpleStrike logs locally while keeping warnings visible on stderr."""
+    """Write detailed execution events to disk and the console (stderr)."""
     directory = Path(log_dir).expanduser().resolve()
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -27,7 +29,7 @@ def configure_logging(log_dir: str | Path = "logs") -> Path:
     timestamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S_%f")
     log_path = directory / f"purplestrike_{timestamp}_{os.getpid()}.log"
 
-    formatter = logging.Formatter(
+    formatter = ExecutionFormatter(
         fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
         datefmt="%Y-%m-%dT%H:%M:%S%z",
     )
@@ -44,7 +46,7 @@ def configure_logging(log_dir: str | Path = "logs") -> Path:
     package_logger.addHandler(file_handler)
 
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.WARNING)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter)
     console_handler.set_name(_CONSOLE_HANDLER_NAME)
     package_logger.addHandler(console_handler)

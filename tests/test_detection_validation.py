@@ -405,6 +405,35 @@ async def test_delayed_prior_event_is_excluded_even_when_ingestion_is_in_window(
     assert result.matched_alerts == []
 
 
+async def test_empty_candidate_reason_and_logs_distinguish_stale_and_routine_events(caplog):
+    import json
+    import logging
+
+    start = datetime.now(UTC)
+    stale = SIEMAlert(
+        alert_id="previous-step", timestamp=start, rule_id="91818",
+        raw_log={"data": {"win": {"system": {
+            "systemTime": (start - timedelta(seconds=10)).isoformat(),
+        }}}},
+    )
+    routine = SIEMAlert(alert_id="logon", timestamp=start, rule_id="92657")
+    caplog.set_level(logging.INFO, logger="purplestrike.validation.engine")
+    result = await DetectionValidationEngine(FakeSIEMConnector([stale, routine], [])).validate_step(
+        "T1543.003", [], "test-host", start, start + timedelta(seconds=30),
+    )
+    assert result.status == DetectionStatus.NOT_DETECTED
+    assert "SIEM returned 2; 1 outside the event window; 1 routine" in (
+        result.ai_correlation_reasoning
+    )
+    events = [r.getMessage() for r in caplog.records]
+    query_result = next(e for e in events if e.startswith("detection.query.result\n"))
+    details = json.loads(query_result.split("\n", 1)[1])
+    assert details["returned_count"] == 2
+    assert details["outside_event_window_count"] == 1
+    assert details["routine_auth_count"] == 1
+    assert details["candidate_count"] == 0
+
+
 async def test_validation_matches_alert_mitre_even_without_expected_rule() -> None:
     alert = SIEMAlert(
         alert_id="alert-2",
